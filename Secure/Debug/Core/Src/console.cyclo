@@ -1,3 +1,0 @@
-../Core/Src/console.cpp:15:16:int __io_putchar(int)	1
-../Core/Src/console.cpp:21:16:int _write(int, char*, int)	2
-../Core/Src/console.cpp:31:16:int Console_GetChar(uint32_t)	2

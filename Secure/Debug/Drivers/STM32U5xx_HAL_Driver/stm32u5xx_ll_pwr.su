@@ -1,6 +1,0 @@
-../../Drivers/STM32U5xx_HAL_Driver/Inc/stm32u5xx_ll_pwr.h:3116:22:LL_PWR_ClearFlag_STOP	4	static
-../../Drivers/STM32U5xx_HAL_Driver/Inc/stm32u5xx_ll_pwr.h:3216:22:LL_PWR_ClearFlag_WU	4	static
-../../Drivers/STM32U5xx_HAL_Driver/Inc/stm32u5xx_ll_pwr.h:3243:22:LL_PWR_DisableNSecurePrivilege	4	static
-../../Drivers/STM32U5xx_HAL_Driver/Inc/stm32u5xx_ll_pwr.h:3274:22:LL_PWR_DisableSecurePrivilege	4	static
-../../Drivers/STM32U5xx_HAL_Driver/Inc/stm32u5xx_ll_pwr.h:3322:22:LL_PWR_ConfigSecure	16	static
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_ll_pwr.c:55:13:LL_PWR_DeInit	8	static

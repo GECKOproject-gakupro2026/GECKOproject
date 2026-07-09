@@ -1,4 +1,0 @@
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_detection_thresholds.c:15:9:vl53l5cx_get_detection_thresholds_enable	1
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_detection_thresholds.c:28:9:vl53l5cx_set_detection_thresholds_enable	2
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_detection_thresholds.c:59:9:vl53l5cx_get_detection_thresholds	18
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_detection_thresholds.c:107:9:vl53l5cx_set_detection_thresholds	8

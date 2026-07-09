@@ -1,5 +1,0 @@
-../Core/Src/tests_sensors.cpp:21:8:apptest::Result apptest::testEnvSensors()	40	static
-../Core/Src/tests_sensors.cpp:77:8:apptest::Result apptest::testMotionSensors()	80	static
-../Core/Src/tests_sensors.cpp:140:8:apptest::Result apptest::testLightSensor()	24	static
-../Core/Src/tests_sensors.cpp:171:8:apptest::Result apptest::testRangingSensor()	32	static
-../Core/Src/tests_sensors.cpp:207:8:apptest::Result apptest::testEeprom()	72	static

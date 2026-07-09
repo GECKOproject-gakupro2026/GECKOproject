@@ -1,4 +1,0 @@
-../LPBAM/LpbamAp1/lpbam_lpbamap1_config.c:37:6:MX_LpbamAp1_Init	1
-../LPBAM/LpbamAp1/lpbam_lpbamap1_config.c:63:13:MX_SystemClock_Config	5
-../LPBAM/LpbamAp1/lpbam_lpbamap1_config.c:112:13:MX_SystemPower_Config	1
-../LPBAM/LpbamAp1/lpbam_lpbamap1_config.c:131:13:MX_SRAM_WaitState_Config	3

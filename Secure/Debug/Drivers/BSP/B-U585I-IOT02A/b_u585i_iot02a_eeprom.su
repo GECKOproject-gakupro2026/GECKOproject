@@ -1,9 +1,0 @@
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c:89:9:BSP_EEPROM_Init	24	static
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c:114:9:BSP_EEPROM_DeInit	24	static
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c:142:9:BSP_EEPROM_WritePage	40	static
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c:179:9:BSP_EEPROM_ReadPage	40	static
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c:209:9:BSP_EEPROM_ReadBuffer	40	static
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c:238:9:BSP_EEPROM_WriteBuffer	56	static
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c:393:9:BSP_EEPROM_IsDeviceReady	24	static
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c:428:16:EEPROM_WriteBytes	40	static
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c:456:16:M24256_Probe	40	static

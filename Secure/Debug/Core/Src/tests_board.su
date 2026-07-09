@@ -1,2 +1,0 @@
-../Core/Src/tests_board.cpp:18:8:apptest::Result apptest::testLed()	16	static
-../Core/Src/tests_board.cpp:51:8:apptest::Result apptest::testButton()	16	static

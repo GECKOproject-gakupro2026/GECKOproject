@@ -1,7 +1,0 @@
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_xtalk.c:20:16:_vl53l5cx_poll_for_answer	4
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_xtalk.c:54:16:_vl53l5cx_program_output_config	8
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_xtalk.c:146:9:vl53l5cx_calibrate_xtalk	12
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_xtalk.c:287:9:vl53l5cx_get_caldata_xtalk	1
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_xtalk.c:316:9:vl53l5cx_set_caldata_xtalk	1
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_xtalk.c:329:9:vl53l5cx_get_xtalk_margin	1
-D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/Components/vl53l5cx/modules/vl53l5cx_plugin_xtalk.c:344:9:vl53l5cx_set_xtalk_margin	2

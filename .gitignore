@@ -1,0 +1,13 @@
+# STM32CubeIDE build output
+Secure/Debug/
+NonSecure/Debug/
+Secure_nsclib/Debug/
+Debug/
+Release/
+
+# Python
+__pycache__/
+*.pyc
+
+# PC-side recordings and scratch output
+pc_side/status_monitor/recordings/

@@ -1,3 +1,0 @@
-../Core/Src/tests_wireless.cpp:28:6:bool apptest::{anonymous}::bleProbe(const char*, uint8_t*, size_t, uint16_t*)	32	static
-../Core/Src/tests_wireless.cpp:47:8:apptest::Result apptest::testBleModule()	80	static
-../Core/Src/tests_wireless.cpp:74:8:apptest::Result apptest::testWifiModule()	64	static

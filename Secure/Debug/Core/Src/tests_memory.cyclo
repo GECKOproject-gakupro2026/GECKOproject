@@ -1,7 +1,0 @@
-../Core/Src/tests_memory.cpp:23:6:void apptest::{anonymous}::fillPattern(uint8_t*, size_t, uint8_t)	2
-../Core/Src/tests_memory.cpp:32:8:apptest::Result apptest::testOspiNor()	10
-../Core/Src/tests_memory.cpp:83:8:apptest::Result apptest::testOspiPsram()	9
-../Core/Src/tests_memory.cpp:134:8:apptest::Result apptest::testInternalFlash()	4
-../Core/Src/tests_memory.cpp:205:8:apptest::Result apptest::testSramBuffer()	10
-../Core/Src/tests_memory.cpp:180:8:bool apptest::RingBuffer<T, N>::push(const T&) [with T = short int; unsigned int N = 512]	2
-../Core/Src/tests_memory.cpp:188:8:bool apptest::RingBuffer<T, N>::pop(T&) [with T = short int; unsigned int N = 512]	2
