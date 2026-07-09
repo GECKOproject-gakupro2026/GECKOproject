@@ -1,0 +1,14 @@
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:200:6:HAL_GPIO_Init	18
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:373:6:HAL_GPIO_DeInit	5
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:475:15:HAL_GPIO_ReadPin	2
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:509:6:HAL_GPIO_WritePin	2
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:540:6:HAL_GPIO_WriteMultipleStatePin	1
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:561:6:HAL_GPIO_TogglePin	1
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:587:19:HAL_GPIO_LockPin	5
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:671:6:HAL_GPIO_EnableHighSPeedLowVoltage	5
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:729:6:HAL_GPIO_DisableHighSPeedLowVoltage	5
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:780:6:HAL_GPIO_EXTI_IRQHandler	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:801:13:HAL_GPIO_EXTI_Rising_Callback	1
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:816:13:HAL_GPIO_EXTI_Falling_Callback	1
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:854:6:HAL_GPIO_ConfigPinAttributes	4
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/STM32U5xx_HAL_Driver/Src/stm32u5xx_hal_gpio.c:910:19:HAL_GPIO_GetConfigPinAttributes	6

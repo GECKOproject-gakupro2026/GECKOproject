@@ -1,0 +1,5 @@
+../Core/Src/tests_sensors.cpp:21:8:apptest::Result apptest::testEnvSensors()	20
+../Core/Src/tests_sensors.cpp:77:8:apptest::Result apptest::testMotionSensors()	19
+../Core/Src/tests_sensors.cpp:140:8:apptest::Result apptest::testLightSensor()	5
+../Core/Src/tests_sensors.cpp:171:8:apptest::Result apptest::testRangingSensor()	6
+../Core/Src/tests_sensors.cpp:207:8:apptest::Result apptest::testEeprom()	9

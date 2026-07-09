@@ -1,0 +1,10 @@
+../Core/Inc/test.hpp:37:3:apptest::Runner::Runner(const apptest::Case*, size_t)	1
+../Core/Inc/test.hpp:42:10:size_t apptest::Runner::count() const	1
+../Core/Src/test.cpp:46:13:const char* apptest::{anonymous}::toString(apptest::Result)	3
+../Core/Src/test.cpp:57:8:apptest::Result apptest::Runner::runOne(size_t)	2
+../Core/Src/test.cpp:68:6:void apptest::Runner::runAll()	2
+../Core/Src/test.cpp:76:6:void apptest::Runner::printSummary() const	5
+../Core/Src/test.cpp:96:6:bool apptest::Runner::allPassed() const	4
+../Core/Src/test.cpp:110:6:void apptest::{anonymous}::interactiveMenu(apptest::Runner&)	9
+../Core/Src/test.cpp:141:17:void App_RunTestsOnce()	4
+../Core/Src/test.cpp:150:17:void App_TestMain()	4

@@ -1,0 +1,2 @@
+../Core/Src/frame_codec.c:11:10:Frame_Crc16	4
+../Core/Src/frame_codec.c:26:8:Frame_Encode	4

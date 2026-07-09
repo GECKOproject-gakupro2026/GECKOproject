@@ -1,0 +1,17 @@
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:86:9:BSP_LIGHT_SENSOR_Init	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:127:9:BSP_LIGHT_SENSOR_DeInit	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:158:9:BSP_LIGHT_SENSOR_ReadID	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:191:9:BSP_LIGHT_SENSOR_GetCapabilities	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:226:9:BSP_LIGHT_SENSOR_SetGain	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:260:9:BSP_LIGHT_SENSOR_GetGain	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:294:9:BSP_LIGHT_SENSOR_SetExposureTime	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:330:9:BSP_LIGHT_SENSOR_GetExposureTime	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:369:9:BSP_LIGHT_SENSOR_SetInterMeasurementTime	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:404:9:BSP_LIGHT_SENSOR_GetInterMeasurementTime	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:439:9:BSP_LIGHT_SENSOR_Start	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:471:9:BSP_LIGHT_SENSOR_Stop	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:508:9:BSP_LIGHT_SENSOR_StartFlicker	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:542:9:BSP_LIGHT_SENSOR_StopFlicker	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:577:9:BSP_LIGHT_SENSOR_GetValues	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:612:9:BSP_LIGHT_SENSOR_SetControlMode	3
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_light_sensor.c:697:16:VEML3235_Probe	4

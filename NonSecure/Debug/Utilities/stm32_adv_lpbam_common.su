@@ -1,0 +1,5 @@
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Utilities/lpbam/stm32_adv_lpbam_common.c:241:16:ADV_LPBAM_Q_SetDataConfig	56	static
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Utilities/lpbam/stm32_adv_lpbam_common.c:291:16:ADV_LPBAM_Q_SetTransferEventGeneration	56	static
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Utilities/lpbam/stm32_adv_lpbam_common.c:336:16:ADV_LPBAM_Q_SetTriggerConfig	40	static
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Utilities/lpbam/stm32_adv_lpbam_common.c:371:16:ADV_LPBAM_Q_SetCircularMode	32	static
+D:/App/STM32CubeIDE/workspace_2.1.1/B-U585I-IOT02A/Utilities/lpbam/stm32_adv_lpbam_common.c:409:16:ADV_LPBAM_Q_ConvertQ	16	static
