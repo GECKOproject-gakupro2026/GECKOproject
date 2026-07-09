@@ -62,7 +62,7 @@ uint8_t audioFrame[1024 + FRAME_OVERHEAD]; /* PCM streaming TX buffer */
 /* --- BLE AT link state (set from AT reply/event callbacks) --- */
 volatile bool bleLinkOk = false;
 volatile bool bleConnected = false;
-uint8_t bleAtBuffer[64];
+uint8_t bleAtBuffer[160]; /* long +BLE_EVT_WRITE events exceed 64 chars */
 uint8_t bleRxByte;
 bool bleGlueReady = false;
 
@@ -257,6 +257,11 @@ void tcpServerInit()
     tcpListenFd = -1;
     return;
   }
+  /* lwip semantics: accept() honours SO_RCVTIMEO of the listening socket,
+   * turning the module's ~10 s blocking accept into a cheap 100 ms poll */
+  int32_t acceptTmo = 100;
+  (void)MX_WIFI_Socket_setsockopt(obj, tcpListenFd, MX_SOL_SOCKET,
+                                  MX_SO_RCVTIMEO, &acceptTmo, sizeof(acceptTmo));
   printf("[TLM] TCP server listening on port %u\r\n", CFG_WIFI_TCP_PORT);
 }
 
@@ -640,6 +645,13 @@ void Service::pollTcp()
     }
     nextAcceptTick = now + 1000U;
 
+    /* A pending console key must win over the ~10 s blocking accept,
+     * otherwise the interactive commands become unusable */
+    if (__HAL_UART_GET_FLAG(&::huart1, UART_FLAG_RXNE))
+    {
+      return;
+    }
+
     struct mx_sockaddr_in ca = {};
     uint32_t calen = sizeof(ca);
     uint32_t t0 = HAL_GetTick();
@@ -837,5 +849,25 @@ extern "C" uint8_t stm32wb_at_BLE_EVT_CONN_cb(stm32wb_at_BLE_EVT_CONN_t *param)
 {
   telemetry::bleConnected = (param->status != 0U);
   printf("[TLM] BLE central %s\r\n", telemetry::bleConnected ? "connected" : "disconnected");
+  return 0;
+}
+
+/* PC -> board data path: GATT write on the P2P write characteristic (fe41) */
+extern "C" uint8_t stm32wb_at_BLE_EVT_WRITE_cb(stm32wb_at_BLE_EVT_WRITE_t *param)
+{
+  printf("[TLM] BLE write: svc=%u char=%u len=%u val0=0x%02X\r\n",
+         param->svc_index, param->char_index, param->val_tab_len,
+         param->val_tab_len > 0U ? param->val_tab[0] : 0U);
+  if ((param->svc_index == 1U) && (param->val_tab_len > 0U))
+  {
+    if (param->val_tab[0] != 0U)
+    {
+      BSP_LED_On(LED_GREEN);
+    }
+    else
+    {
+      BSP_LED_Off(LED_GREEN);
+    }
+  }
   return 0;
 }

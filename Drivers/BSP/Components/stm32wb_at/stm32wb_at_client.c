@@ -27,7 +27,9 @@
 
 /* Private macros ------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
-static char client_buff_tx[64];
+/* Patched: 64 was too small - AT+BLE_NOTIF_VAL with a 20-byte payload is a
+ * 65-character command line (17 + 4 + 2 + 40 + CRLF) and overflowed here */
+static char client_buff_tx[160];
 static stm32wb_at_BLE_CMD_t client_current_cmd;
 
 /* Private function prototypes -----------------------------------------------*/
