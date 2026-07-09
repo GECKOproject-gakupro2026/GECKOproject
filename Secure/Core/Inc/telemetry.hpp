@@ -79,6 +79,8 @@ private:
   void collect(FullStatus &st);
   void sendUart(const FullStatus &st);
   void sendBle(const FullStatus &st);
+  void sendTcp(const FullStatus &st);
+  void pollTcp();
 
   FullStatus status_ = {};
   uint32_t nextFullTick_ = 0;
@@ -87,6 +89,7 @@ private:
   uint8_t uartSeq_ = 0;
   uint8_t bleSeq_ = 0;
   uint8_t audioSeq_ = 0;
+  uint8_t tcpSeq_ = 0;
   bool sensorsOk_ = false;
   bool audioOk_ = false;
   bool tofOk_ = false;

@@ -1,1 +1,2 @@
-../Core/Src/app_main.cpp:23:17:void App_Main()	16	static
+../Core/Src/app_main.cpp:26:13:void bleBridge()	24	static
+../Core/Src/app_main.cpp:66:17:void App_Main()	16	static

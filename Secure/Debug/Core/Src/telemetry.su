@@ -1,24 +1,30 @@
 ../Core/Src/telemetry.cpp:70:6:void telemetry::{anonymous}::wifiPinsInit()	48	static
-../Core/Src/telemetry.cpp:115:6:bool telemetry::{anonymous}::wifiModuleInit()	48	static
-../Core/Src/telemetry.cpp:169:6:void telemetry::{anonymous}::reselectAudioPll3()	208	static
-../Core/Src/telemetry.cpp:185:6:void telemetry::Service::initAudio()	40	static
-../Core/Src/telemetry.cpp:226:6:void telemetry::Service::initSensors()	40	static
-../Core/Src/telemetry.cpp:283:13:void telemetry::bleRawProbe(const char*)	128	static
-../Core/Src/telemetry.cpp:302:6:void telemetry::Service::initRadio()	24	static
-../Core/Src/telemetry.cpp:337:6:void telemetry::Service::init()	16	static
-../Core/Src/telemetry.cpp:349:6:void telemetry::Service::collect(telemetry::FullStatus&)	160	static
-../Core/Src/telemetry.cpp:453:6:void telemetry::Service::sendUart(const telemetry::FullStatus&)	176	static
-../Core/Src/telemetry.cpp:465:6:void telemetry::Service::sendBle(const telemetry::FullStatus&)	112	static
-../Core/Src/telemetry.cpp:495:6:void telemetry::Service::setAudioStream(bool)	16	static
-../Core/Src/telemetry.cpp:502:6:void telemetry::Service::poll()	48	static
-../Core/Src/telemetry.cpp:547:17:void BSP_AUDIO_IN_HalfTransfer_CallBack(uint32_t)	16	static
-../Core/Src/telemetry.cpp:553:17:void BSP_AUDIO_IN_TransferComplete_CallBack(uint32_t)	16	static
-../Core/Src/telemetry.cpp:559:17:void BSP_AUDIO_IN_Error_CallBack(uint32_t)	16	static
-../Core/Src/telemetry.cpp:567:20:uint8_t stm32wb_at_ll_Init()	8	static
-../Core/Src/telemetry.cpp:579:20:uint8_t stm32wb_at_ll_DeInit()	8	static
-../Core/Src/telemetry.cpp:585:20:uint8_t stm32wb_at_ll_Transmit(uint8_t*, uint16_t)	16	static
-../Core/Src/telemetry.cpp:590:17:void stm32wb_at_ll_Async_receive(uint8_t)	16	static
-../Core/Src/telemetry.cpp:596:17:void HAL_UART_RxCpltCallback(UART_HandleTypeDef*)	16	static
-../Core/Src/telemetry.cpp:608:17:void HAL_GPIO_EXTI_Rising_Callback(uint16_t)	16	static
-../Core/Src/telemetry.cpp:618:20:uint8_t stm32wb_at_BLE_TEST_cb(stm32wb_at_BLE_TEST_t*)	16	static
-../Core/Src/telemetry.cpp:625:20:uint8_t stm32wb_at_BLE_EVT_CONN_cb(stm32wb_at_BLE_EVT_CONN_t*)	16	static
+../Core/Src/telemetry.cpp:122:20:constexpr uint16_t telemetry::{anonymous}::mxHtons(uint16_t)	16	static
+../Core/Src/telemetry.cpp:129:6:void telemetry::{anonymous}::wifiStatusCb(uint8_t, uint8_t, void*)	16	static
+../Core/Src/telemetry.cpp:140:6:bool telemetry::{anonymous}::wifiModuleInit()	64	static
+../Core/Src/telemetry.cpp:230:6:void telemetry::{anonymous}::tcpServerInit()	32	static
+../Core/Src/telemetry.cpp:263:6:void telemetry::{anonymous}::tcpCloseClient()	8	static
+../Core/Src/telemetry.cpp:274:6:void telemetry::{anonymous}::reselectAudioPll3()	208	static
+../Core/Src/telemetry.cpp:290:6:void telemetry::Service::initAudio()	40	static
+../Core/Src/telemetry.cpp:331:6:void telemetry::Service::initSensors()	40	static
+../Core/Src/telemetry.cpp:388:13:void telemetry::bleRawProbe(const char*)	128	static
+../Core/Src/telemetry.cpp:407:6:void telemetry::Service::initRadio()	24	static
+../Core/Src/telemetry.cpp:444:6:void telemetry::Service::init()	16	static
+../Core/Src/telemetry.cpp:456:6:void telemetry::Service::collect(telemetry::FullStatus&)	160	static
+../Core/Src/telemetry.cpp:560:6:void telemetry::Service::sendUart(const telemetry::FullStatus&)	176	static
+../Core/Src/telemetry.cpp:572:6:void telemetry::Service::sendBle(const telemetry::FullStatus&)	112	static
+../Core/Src/telemetry.cpp:602:6:void telemetry::Service::sendTcp(const telemetry::FullStatus&)	184	static
+../Core/Src/telemetry.cpp:624:6:void telemetry::Service::pollTcp()	216	static
+../Core/Src/telemetry.cpp:698:6:void telemetry::Service::setAudioStream(bool)	16	static
+../Core/Src/telemetry.cpp:705:6:void telemetry::Service::poll()	48	static
+../Core/Src/telemetry.cpp:758:17:void BSP_AUDIO_IN_HalfTransfer_CallBack(uint32_t)	16	static
+../Core/Src/telemetry.cpp:764:17:void BSP_AUDIO_IN_TransferComplete_CallBack(uint32_t)	16	static
+../Core/Src/telemetry.cpp:770:17:void BSP_AUDIO_IN_Error_CallBack(uint32_t)	16	static
+../Core/Src/telemetry.cpp:778:20:uint8_t stm32wb_at_ll_Init()	8	static
+../Core/Src/telemetry.cpp:790:20:uint8_t stm32wb_at_ll_DeInit()	8	static
+../Core/Src/telemetry.cpp:796:20:uint8_t stm32wb_at_ll_Transmit(uint8_t*, uint16_t)	16	static
+../Core/Src/telemetry.cpp:801:17:void stm32wb_at_ll_Async_receive(uint8_t)	16	static
+../Core/Src/telemetry.cpp:807:17:void HAL_UART_RxCpltCallback(UART_HandleTypeDef*)	16	static
+../Core/Src/telemetry.cpp:819:17:void HAL_GPIO_EXTI_Rising_Callback(uint16_t)	16	static
+../Core/Src/telemetry.cpp:829:20:uint8_t stm32wb_at_BLE_TEST_cb(stm32wb_at_BLE_TEST_t*)	16	static
+../Core/Src/telemetry.cpp:836:20:uint8_t stm32wb_at_BLE_EVT_CONN_cb(stm32wb_at_BLE_EVT_CONN_t*)	16	static

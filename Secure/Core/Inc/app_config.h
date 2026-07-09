@@ -53,8 +53,8 @@
 
 /* Wi-Fi network credentials: fill in to let the board join your access point
  * and start the telemetry TCP server (leave SSID empty to skip connecting) */
-#define CFG_WIFI_SSID            ""
-#define CFG_WIFI_PASSWORD        ""
+#define CFG_WIFI_SSID            "Buffalo-Wifi-2.4G"
+#define CFG_WIFI_PASSWORD        "kubokihome"
 #define CFG_WIFI_TCP_PORT        5000U
 
 /* ---- Console menu -------------------------------------------------------- */

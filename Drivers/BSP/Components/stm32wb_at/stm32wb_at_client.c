@@ -1529,8 +1529,18 @@ uint8_t stm32wb_at_client_Set(stm32wb_at_BLE_CMD_t cmd, void *param)
  */
 static uint8_t stm32wb_at_client_Wait_ready(void)
 {
+  /* Patched: the stock loop spins forever when the module never completes a
+   * reply (e.g. wrong/missing AT firmware). Give up after 2 s and reset the
+   * pending-command state so later calls are not wedged too. */
+  uint32_t start = HAL_GetTick();
+
   while (client_current_cmd !=  BLE_NONE)
   {
+    if ((HAL_GetTick() - start) > 2000U)
+    {
+      client_current_cmd = BLE_NONE;
+      return 1;
+    }
   }
 
   return 0;
