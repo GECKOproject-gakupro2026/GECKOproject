@@ -244,6 +244,14 @@ void UART4_IRQHandler(void)
   HAL_UART_IRQHandler(&huart4);
 }
 
+/* VCP console/telemetry (USART1, interrupt-driven TX) */
+extern UART_HandleTypeDef huart1;
+
+void USART1_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart1);
+}
+
 /* EMW3080 Wi-Fi module handshake lines (NOTIFY=PD14, FLOW=PG15) */
 void EXTI14_IRQHandler(void)
 {

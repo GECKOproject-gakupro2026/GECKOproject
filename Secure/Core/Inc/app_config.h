@@ -51,10 +51,21 @@
 /* ---- Wi-Fi module -------------------------------------------------------- */
 #define CFG_WIFI_BOOT_TIMEOUT_MS 5000U
 
-/* Wi-Fi network credentials: fill in to let the board join your access point
- * and start the telemetry TCP server (leave SSID empty to skip connecting) */
+/* Operating mode: 1 = SoftAP (the board emits its own Wi-Fi network and the
+ * PC connects to it - no router needed), 0 = STA (join an existing AP) */
+#define CFG_WIFI_MODE_SOFTAP     1
+
+/* SoftAP settings (mode 1): connect your PC to this network, then open
+ * the status monitor with Wi-Fi (TCP) target 192.168.4.1:5000 */
+#define CFG_WIFI_AP_SSID         "U585-IOT02A"
+#define CFG_WIFI_AP_PASSWORD     "u585iot02a"  /* WPA2, 8+ chars */
+#define CFG_WIFI_AP_CHANNEL      6
+#define CFG_WIFI_AP_IP           "192.168.4.1"
+
+/* STA credentials (mode 0): the board joins this access point instead */
 #define CFG_WIFI_SSID            "Buffalo-Wifi-2.4G"
 #define CFG_WIFI_PASSWORD        "kubokihome"
+
 #define CFG_WIFI_TCP_PORT        5000U
 
 /* ---- Console menu -------------------------------------------------------- */
@@ -65,7 +76,14 @@
 #define CFG_CONSOLE_BAUDRATE     921600U
 
 /* ---- Telemetry rates ------------------------------------------------------ */
-#define CFG_TLM_FULL_PERIOD_MS   100U  /* full status over VCP: 10 Hz         */
-#define CFG_TLM_BLE_PERIOD_MS    1000U /* compact status over BLE: 1 Hz       */
+#define CFG_TLM_FULL_PERIOD_MS   20U   /* full status over VCP/TCP: 50 Hz     */
+#define CFG_TLM_ENV_PERIOD_MS    100U  /* HTS221/LPS22HH refresh (ODR limit)  */
+#define CFG_TLM_LIGHT_PERIOD_MS  200U  /* VEML3235 refresh (integration time) */
+#define CFG_TLM_TOF_PERIOD_MS    500U  /* VL53L5CX refresh (~35 ms of I2C per
+                                          read - keep it off the fast path)   */
+#define CFG_TLM_MCU_PERIOD_MS    500U  /* die temp / memory / CPU load        */
+#define CFG_TLM_BLE_PERIOD_MS    1000U /* compact status over BLE: 1 Hz (the
+                                          9600-baud AT link blocks ~200 ms per
+                                          notification - keep it rare)        */
 
 #endif /* APP_CONFIG_H */

@@ -14,6 +14,12 @@ asm(".global _printf_float");
 
 extern "C" int __io_putchar(int ch)
 {
+  /* Telemetry uses interrupt TX on the same UART: wait for it to drain so
+   * log characters are not rejected with HAL_BUSY */
+  uint32_t t0 = HAL_GetTick();
+  while (huart1.gState != HAL_UART_STATE_READY && (HAL_GetTick() - t0) < 20U)
+  {
+  }
   HAL_UART_Transmit(&huart1, reinterpret_cast<uint8_t *>(&ch), 1, 100);
   return ch;
 }

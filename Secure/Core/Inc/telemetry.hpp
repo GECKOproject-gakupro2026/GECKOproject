@@ -2,8 +2,9 @@
   ******************************************************************************
   * @file    telemetry.hpp
   * @brief   Continuous board-status telemetry: collects sensors / audio /
-  *          radio / memory info and streams framed packets over the ST-LINK
-  *          VCP (full status, 5 Hz) and the BLE module (compact, 1 Hz).
+  *          radio / memory / MCU info and streams framed packets over the
+  *          VCP + Wi-Fi TCP (full status, 50 Hz) and BLE (compact, all
+  *          sensors, 2 Hz).
   ******************************************************************************
   */
 #ifndef TELEMETRY_HPP
@@ -14,11 +15,12 @@
 namespace telemetry
 {
 
-/* Full status payload (FRAME_CMD_STATUS, little endian, packed).
- * Python: struct.unpack("<BBIhHI3h3h3hIHBhh32hBB6I", payload), size 133 */
+/* Full status payload v2 (FRAME_CMD_STATUS, little endian, packed).
+ * Python: struct.unpack("<BBIhHI3h3h3hIHBhh32hBB6I" + "hHIIBBH3II", payload)
+ * size 133 (v1 part) + 32 (MCU info) = 165 */
 struct __attribute__((packed)) FullStatus
 {
-  uint8_t ver;
+  uint8_t ver; /* = 2 */
   uint8_t button;
   uint32_t uptime_ms;
   int16_t temp_x100;
@@ -41,11 +43,22 @@ struct __attribute__((packed)) FullStatus
   uint32_t heap_free;
   uint32_t flash_used;
   uint32_t flash_total;
+  /* --- v2: MCU details --- */
+  int16_t die_temp_x100;  /* internal temperature sensor via ADC1 */
+  uint16_t vdda_mv;       /* analog supply derived from VREFINT   */
+  uint32_t sysclk_hz;
+  uint32_t hclk_hz;
+  uint8_t reset_cause;    /* RCC_CSR[31:24]: LPWR|WWDG|IWDG|SFT|BOR|PIN|OBL|- */
+  uint8_t cpu_load_pct;   /* main-loop headroom estimate                     */
+  uint16_t flash_kb;      /* factory flash size register                     */
+  uint32_t uid[3];        /* 96-bit unique device ID                         */
+  uint32_t idcode;        /* DBGMCU IDCODE (device + revision)               */
 };
-static_assert(sizeof(FullStatus) == 133, "FullStatus layout must match PC parser");
+static_assert(sizeof(FullStatus) == 165, "FullStatus layout must match PC parser");
 
-/* Compact status payload (FRAME_CMD_STATUS_MINI, 12 bytes -> 20-byte frame,
- * fits a default-MTU BLE notification). Python: "<BhHHHHB" */
+/* Compact status payload v2 (FRAME_CMD_STATUS_MINI): every sensor in one
+ * BLE notification (39 B payload -> 47 B frame, fits the AT server's 64 B
+ * limit). Python: "<BhHHHH3h3h3hhhHhBB" */
 struct __attribute__((packed)) MiniStatus
 {
   uint8_t button;
@@ -54,9 +67,17 @@ struct __attribute__((packed)) MiniStatus
   uint16_t press_x10;
   uint16_t light_raw16;
   uint16_t tof_mm;
-  uint8_t audio_level;
+  int16_t acc_mg[3];
+  int16_t gyro_dps10[3];
+  int16_t mag_mgauss[3];
+  int16_t audio_rms;
+  int16_t audio_peak;
+  uint16_t uptime_s;
+  int16_t die_temp_x100;
+  uint8_t flags;      /* bit0 ble, bit1 wifi, bit2 tof_ok */
+  uint8_t cpu_load_pct;
 };
-static_assert(sizeof(MiniStatus) == 12, "MiniStatus layout must match PC parser");
+static_assert(sizeof(MiniStatus) == 39, "MiniStatus layout must match PC parser");
 
 class Service
 {
@@ -68,7 +89,7 @@ public:
   /* One scheduler pass; call from the main loop as fast as possible. */
   void poll();
 
-  /* Live PCM streaming over the VCP (16 kHz mono int16, CMD 0x03 frames) */
+  /* Live PCM streaming over VCP + TCP (16 kHz mono int16, CMD 0x03 frames) */
   void setAudioStream(bool enable);
   bool audioStreamEnabled() const { return audioStream_; }
 
@@ -76,7 +97,10 @@ private:
   void initSensors();
   void initAudio();
   void initRadio();
+  void initMcuInfo();
   void collect(FullStatus &st);
+  void refreshSlowSensors(FullStatus &st);
+  void refreshMcuInfo(FullStatus &st);
   void sendUart(const FullStatus &st);
   void sendBle(const FullStatus &st);
   void sendTcp(const FullStatus &st);
@@ -84,8 +108,14 @@ private:
 
   FullStatus status_ = {};
   uint32_t nextFullTick_ = 0;
+  uint32_t nextEnvTick_ = 0;
+  uint32_t nextLightTick_ = 0;
   uint32_t nextTofTick_ = 0;
+  uint32_t nextMcuTick_ = 0;
   uint32_t nextBleTick_ = 0;
+  uint32_t loopCount_ = 0;
+  uint32_t loopWindowStart_ = 0;
+  uint32_t loopMax_ = 0;
   uint8_t uartSeq_ = 0;
   uint8_t bleSeq_ = 0;
   uint8_t audioSeq_ = 0;

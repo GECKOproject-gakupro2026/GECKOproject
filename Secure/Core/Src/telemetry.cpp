@@ -52,12 +52,67 @@ namespace telemetry
 namespace
 {
 constexpr uint32_t kFullPeriodMs = CFG_TLM_FULL_PERIOD_MS;
-constexpr uint32_t kTofPeriodMs = 1000; /* ToF read: 1 Hz */
+constexpr uint32_t kEnvPeriodMs = CFG_TLM_ENV_PERIOD_MS;
+constexpr uint32_t kLightPeriodMs = CFG_TLM_LIGHT_PERIOD_MS;
+constexpr uint32_t kTofPeriodMs = CFG_TLM_TOF_PERIOD_MS;
+constexpr uint32_t kMcuPeriodMs = CFG_TLM_MCU_PERIOD_MS;
 constexpr uint32_t kBlePeriodMs = CFG_TLM_BLE_PERIOD_MS;
+
+/* Internal ADC for die temperature and VDDA (via VREFINT) */
+ADC_HandleTypeDef hadcMcu = {};
+bool adcOk = false;
+
+uint32_t adcReadChannel(uint32_t channel)
+{
+  ADC_ChannelConfTypeDef cfg = {};
+  cfg.Channel = channel;
+  cfg.Rank = ADC_REGULAR_RANK_1;
+  cfg.SamplingTime = ADC_SAMPLETIME_814CYCLES;
+  cfg.SingleDiff = ADC_SINGLE_ENDED;
+  if (HAL_ADC_ConfigChannel(&hadcMcu, &cfg) != HAL_OK ||
+      HAL_ADC_Start(&hadcMcu) != HAL_OK ||
+      HAL_ADC_PollForConversion(&hadcMcu, 10) != HAL_OK)
+  {
+    return 0;
+  }
+  uint32_t v = HAL_ADC_GetValue(&hadcMcu);
+  (void)HAL_ADC_Stop(&hadcMcu);
+  return v;
+}
 constexpr size_t kAudioSamples = 2048;   /* circular capture buffer */
 
 int16_t audioBuf[kAudioSamples];
 uint8_t audioFrame[1024 + FRAME_OVERHEAD]; /* PCM streaming TX buffer */
+
+/* --- Non-blocking VCP transmit (interrupt driven, single in-flight buffer).
+ * Status frames are droppable (next one comes in 20 ms); audio frames spin
+ * briefly for the previous transfer instead. --- */
+volatile bool uartTxBusy = false;
+uint8_t uartTxBuf[1024 + FRAME_OVERHEAD];
+
+bool uartSendAsync(const uint8_t *data, size_t len, uint32_t waitMs)
+{
+  uint32_t t0 = HAL_GetTick();
+  while (uartTxBusy)
+  {
+    if (HAL_GetTick() - t0 >= waitMs)
+    {
+      return false;
+    }
+  }
+  if (len > sizeof(uartTxBuf))
+  {
+    return false;
+  }
+  memcpy(uartTxBuf, data, len);
+  uartTxBusy = true;
+  if (HAL_UART_Transmit_IT(&huart1, uartTxBuf, static_cast<uint16_t>(len)) != HAL_OK)
+  {
+    uartTxBusy = false;
+    return false;
+  }
+  return true;
+}
 
 /* --- BLE AT link state (set from AT reply/event callbacks) --- */
 volatile bool bleLinkOk = false;
@@ -118,6 +173,7 @@ bool wifiNetUp = false;      /* joined the AP, has an IP */
 int32_t tcpListenFd = -1;
 int32_t tcpClientFd = -1;
 uint32_t nextAcceptTick = 0;
+uint32_t tcpSendFails = 0;
 
 constexpr uint16_t mxHtons(uint16_t v)
 {
@@ -171,6 +227,37 @@ bool wifiModuleInit()
          obj->SysInfo.MAC[2], obj->SysInfo.MAC[3], obj->SysInfo.MAC[4],
          obj->SysInfo.MAC[5]);
 
+#if CFG_WIFI_MODE_SOFTAP
+  /* SoftAP mode: the board runs its own network + DHCP server; the PC joins
+   * this network and reaches the telemetry TCP server at CFG_WIFI_AP_IP */
+  {
+    (void)MX_WIFI_RegisterStatusCallback(obj, wifiStatusCb, nullptr);
+
+    MX_WIFI_APSettings_t ap = {};
+    strncpy(ap.SSID, CFG_WIFI_AP_SSID, sizeof(ap.SSID) - 1U);
+    strncpy(ap.pswd, CFG_WIFI_AP_PASSWORD, sizeof(ap.pswd) - 1U);
+    ap.channel = CFG_WIFI_AP_CHANNEL;
+    strncpy(ap.ip.localip, CFG_WIFI_AP_IP, sizeof(ap.ip.localip) - 1U);
+    strncpy(ap.ip.netmask, "255.255.255.0", sizeof(ap.ip.netmask) - 1U);
+    strncpy(ap.ip.gateway, CFG_WIFI_AP_IP, sizeof(ap.ip.gateway) - 1U);
+    strncpy(ap.ip.dnserver, CFG_WIFI_AP_IP, sizeof(ap.ip.dnserver) - 1U);
+
+    int32_t apRet = MX_WIFI_StartAP(obj, &ap);
+    wifiNetUp = (apRet == MX_WIFI_STATUS_OK);
+    if (wifiNetUp)
+    {
+      printf("[TLM] SoftAP up: SSID=\"%s\" pass=\"%s\" ch=%d ip=%s\r\n",
+             CFG_WIFI_AP_SSID, CFG_WIFI_AP_PASSWORD, CFG_WIFI_AP_CHANNEL,
+             CFG_WIFI_AP_IP);
+      printf("[TLM] connect your PC to this Wi-Fi, then TCP %s:%u\r\n",
+             CFG_WIFI_AP_IP, CFG_WIFI_TCP_PORT);
+    }
+    else
+    {
+      printf("[TLM] SoftAP start failed (%ld)\r\n", (long)apRet);
+    }
+  }
+#else /* STA mode */
   if (CFG_WIFI_SSID[0] != '\0')
   {
     (void)MX_WIFI_RegisterStatusCallback(obj, wifiStatusCb, nullptr);
@@ -223,6 +310,7 @@ bool wifiModuleInit()
   {
     printf("[TLM] CFG_WIFI_SSID empty - module verified, not joining an AP\r\n");
   }
+#endif /* CFG_WIFI_MODE_SOFTAP */
   return true;
 }
 
@@ -367,6 +455,10 @@ void Service::initSensors()
     printf("[TLM] env sensor init failed\r\n");
     sensorsOk_ = false;
   }
+  /* Fastest supported output data rates */
+  (void)BSP_ENV_SENSOR_SetOutputDataRate(0, ENV_TEMPERATURE, 12.5f);
+  (void)BSP_ENV_SENSOR_SetOutputDataRate(0, ENV_HUMIDITY, 12.5f);
+  (void)BSP_ENV_SENSOR_SetOutputDataRate(1, ENV_PRESSURE, 75.0f);
 
   if (BSP_MOTION_SENSOR_Init(0, MOTION_ACCELERO | MOTION_GYRO) != BSP_ERROR_NONE ||
       BSP_MOTION_SENSOR_Enable(0, MOTION_ACCELERO) != BSP_ERROR_NONE ||
@@ -377,6 +469,9 @@ void Service::initSensors()
     printf("[TLM] motion sensor init failed\r\n");
     sensorsOk_ = false;
   }
+  (void)BSP_MOTION_SENSOR_SetOutputDataRate(0, MOTION_ACCELERO, 208.0f);
+  (void)BSP_MOTION_SENSOR_SetOutputDataRate(0, MOTION_GYRO, 208.0f);
+  (void)BSP_MOTION_SENSOR_SetOutputDataRate(1, MOTION_MAGNETO, 100.0f);
 
   if (BSP_LIGHT_SENSOR_Init(0) != BSP_ERROR_NONE ||
       BSP_LIGHT_SENSOR_Start(0, LIGHT_SENSOR_MODE_CONTINUOUS) != BSP_ERROR_NONE)
@@ -448,35 +543,182 @@ void Service::initRadio()
 
 void Service::init()
 {
+  /* Interrupt-driven TX on the VCP link */
+  HAL_NVIC_SetPriority(USART1_IRQn, 12, 0);
+  HAL_NVIC_EnableIRQ(USART1_IRQn);
+
   printf("[TLM] initializing telemetry sources...\r\n");
   initSensors();
   initAudio();
+  initMcuInfo();
   initRadio();
-  nextFullTick_ = HAL_GetTick();
-  nextTofTick_ = HAL_GetTick();
-  nextBleTick_ = HAL_GetTick() + 500U;
-  printf("[TLM] streaming: UART 5Hz (133B frames), BLE 1Hz (compact)\r\n");
+  uint32_t now = HAL_GetTick();
+  nextFullTick_ = now;
+  nextEnvTick_ = now;
+  nextLightTick_ = now;
+  nextTofTick_ = now;
+  nextMcuTick_ = now;
+  nextBleTick_ = now + 500U;
+  loopWindowStart_ = now;
+  loopCount_ = 0;
+  printf("[TLM] streaming: UART/TCP %luHz (165B frames v2), BLE %luHz (all sensors)\r\n",
+         1000UL / kFullPeriodMs, 1000UL / kBlePeriodMs);
+}
+
+/* MCU identity + reset cause + internal ADC (called once) */
+void Service::initMcuInfo()
+{
+  status_.reset_cause = static_cast<uint8_t>(RCC->CSR >> 24);
+  __HAL_RCC_CLEAR_RESET_FLAGS();
+  status_.sysclk_hz = HAL_RCC_GetSysClockFreq();
+  status_.hclk_hz = HAL_RCC_GetHCLKFreq();
+  status_.flash_kb = static_cast<uint16_t>(*reinterpret_cast<const uint16_t *>(FLASHSIZE_BASE));
+  status_.uid[0] = HAL_GetUIDw0();
+  status_.uid[1] = HAL_GetUIDw1();
+  status_.uid[2] = HAL_GetUIDw2();
+  status_.idcode = DBGMCU->IDCODE;
+
+  adcOk = false;
+  HAL_PWREx_EnableVddA(); /* release the analog supply isolation */
+  __HAL_RCC_ADC12_CLK_ENABLE();
+  RCC_PeriphCLKInitTypeDef clk = {};
+  clk.PeriphClockSelection = RCC_PERIPHCLK_ADCDAC;
+  clk.AdcDacClockSelection = RCC_ADCDACCLKSOURCE_HSI;
+  if (HAL_RCCEx_PeriphCLKConfig(&clk) != HAL_OK)
+  {
+    printf("[TLM] ADC kernel clock config failed\r\n");
+  }
+
+  hadcMcu.Instance = ADC1;
+  hadcMcu.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV4;
+  hadcMcu.Init.Resolution = ADC_RESOLUTION_14B;
+  hadcMcu.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadcMcu.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadcMcu.Init.ContinuousConvMode = DISABLE;
+  hadcMcu.Init.NbrOfConversion = 1;
+  hadcMcu.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadcMcu.Init.ConversionDataManagement = ADC_CONVERSIONDATA_DR;
+  hadcMcu.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
+  hadcMcu.Init.OversamplingMode = DISABLE;
+  HAL_StatusTypeDef initRet = HAL_ADC_Init(&hadcMcu);
+  HAL_StatusTypeDef calRet = HAL_ERROR;
+  if (initRet == HAL_OK)
+  {
+    calRet = HAL_ADCEx_Calibration_Start(&hadcMcu, ADC_CALIB_OFFSET, ADC_SINGLE_ENDED);
+  }
+  adcOk = (initRet == HAL_OK && calRet == HAL_OK);
+  if (!adcOk)
+  {
+    printf("[TLM] internal ADC init failed (init=%d cal=%d state=0x%lX err=0x%lX)\r\n",
+           initRet, calRet, hadcMcu.State, hadcMcu.ErrorCode);
+  }
+}
+
+/* Die temperature / VDDA / memory statistics / CPU load (every 500 ms) */
+void Service::refreshMcuInfo(FullStatus &st)
+{
+  if (adcOk)
+  {
+    uint32_t vrefRaw = adcReadChannel(ADC_CHANNEL_VREFINT);
+    uint32_t tempRaw = adcReadChannel(ADC_CHANNEL_TEMPSENSOR);
+    if (vrefRaw != 0U)
+    {
+      uint32_t vdda = __HAL_ADC_CALC_VREFANALOG_VOLTAGE(ADC1, vrefRaw, ADC_RESOLUTION_14B);
+      st.vdda_mv = static_cast<uint16_t>(vdda);
+      int32_t tc = __HAL_ADC_CALC_TEMPERATURE(ADC1, vdda, tempRaw, ADC_RESOLUTION_14B);
+      st.die_temp_x100 = static_cast<int16_t>(tc * 100);
+    }
+  }
+
+  struct mallinfo mi = mallinfo();
+  uint32_t staticRam = reinterpret_cast<uint32_t>(&_end) - 0x30000000UL;
+  st.heap_used = static_cast<uint32_t>(mi.uordblks);
+  st.heap_free = static_cast<uint32_t>(mi.fordblks);
+  st.ram_used = staticRam + st.heap_used;
+  st.ram_total = 256U * 1024U;
+  st.flash_used = (reinterpret_cast<uint32_t>(&_etext) - 0x0C000000UL) +
+                  (reinterpret_cast<uint32_t>(&_edata) - reinterpret_cast<uint32_t>(&_sdata));
+  st.flash_total = 1024U * 1024U;
+
+  /* CPU load: main-loop iterations in this window vs the best window seen */
+  uint32_t now = HAL_GetTick();
+  uint32_t win = now - loopWindowStart_;
+  if (win >= 500U)
+  {
+    uint32_t rate = (loopCount_ * 1000U) / win;
+    if (rate > loopMax_)
+    {
+      loopMax_ = rate;
+    }
+    st.cpu_load_pct = (loopMax_ > 0U)
+        ? static_cast<uint8_t>(100U - (100U * rate) / loopMax_) : 0U;
+    loopCount_ = 0;
+    loopWindowStart_ = now;
+  }
+}
+
+/* Slow sensors on their own schedules (ODR / integration-time limited) */
+void Service::refreshSlowSensors(FullStatus &st)
+{
+  uint32_t now = HAL_GetTick();
+
+  if (static_cast<int32_t>(now - nextEnvTick_) >= 0)
+  {
+    nextEnvTick_ += kEnvPeriodMs;
+    float f = 0.0f;
+    if (BSP_ENV_SENSOR_GetValue(0, ENV_TEMPERATURE, &f) == BSP_ERROR_NONE)
+    {
+      st.temp_x100 = static_cast<int16_t>(f * 100.0f);
+    }
+    if (BSP_ENV_SENSOR_GetValue(0, ENV_HUMIDITY, &f) == BSP_ERROR_NONE)
+    {
+      st.hum_x100 = static_cast<uint16_t>(f * 100.0f);
+    }
+    if (BSP_ENV_SENSOR_GetValue(1, ENV_PRESSURE, &f) == BSP_ERROR_NONE)
+    {
+      st.press_x100 = static_cast<uint32_t>(f * 100.0f);
+    }
+  }
+
+  if (static_cast<int32_t>(now - nextLightTick_) >= 0)
+  {
+    nextLightTick_ += kLightPeriodMs;
+    uint32_t light[LIGHT_SENSOR_MAX_CHANNELS] = {};
+    if (BSP_LIGHT_SENSOR_GetValues(0, light) == BSP_ERROR_NONE)
+    {
+      st.light_raw = light[0];
+    }
+  }
+
+  if (tofOk_ && static_cast<int32_t>(now - nextTofTick_) >= 0)
+  {
+    nextTofTick_ += kTofPeriodMs;
+    static RANGING_SENSOR_Result_t result;
+    if (BSP_RANGING_SENSOR_GetDistance(0, &result) == BSP_ERROR_NONE)
+    {
+      st.tof_mm = static_cast<uint16_t>(result.ZoneResult[0].Distance[0]);
+      st.tof_ok = 1;
+    }
+    else
+    {
+      st.tof_ok = 0;
+    }
+  }
+
+  if (static_cast<int32_t>(now - nextMcuTick_) >= 0)
+  {
+    nextMcuTick_ += kMcuPeriodMs;
+    refreshMcuInfo(st);
+  }
 }
 
 void Service::collect(FullStatus &st)
 {
-  st.ver = 1;
+  st.ver = 2;
   st.uptime_ms = HAL_GetTick();
   st.button = (BSP_PB_GetState(BUTTON_USER) == 1) ? 1U : 0U;
 
-  float f = 0.0f;
-  if (BSP_ENV_SENSOR_GetValue(0, ENV_TEMPERATURE, &f) == BSP_ERROR_NONE)
-  {
-    st.temp_x100 = static_cast<int16_t>(f * 100.0f);
-  }
-  if (BSP_ENV_SENSOR_GetValue(0, ENV_HUMIDITY, &f) == BSP_ERROR_NONE)
-  {
-    st.hum_x100 = static_cast<uint16_t>(f * 100.0f);
-  }
-  if (BSP_ENV_SENSOR_GetValue(1, ENV_PRESSURE, &f) == BSP_ERROR_NONE)
-  {
-    st.press_x100 = static_cast<uint32_t>(f * 100.0f);
-  }
+  refreshSlowSensors(st);
 
   BSP_MOTION_SENSOR_Axes_t axes = {};
   if (BSP_MOTION_SENSOR_GetAxes(0, MOTION_ACCELERO, &axes) == BSP_ERROR_NONE)
@@ -496,28 +738,6 @@ void Service::collect(FullStatus &st)
     st.mag_mgauss[0] = static_cast<int16_t>(axes.xval);
     st.mag_mgauss[1] = static_cast<int16_t>(axes.yval);
     st.mag_mgauss[2] = static_cast<int16_t>(axes.zval);
-  }
-
-  uint32_t light[LIGHT_SENSOR_MAX_CHANNELS] = {};
-  if (BSP_LIGHT_SENSOR_GetValues(0, light) == BSP_ERROR_NONE)
-  {
-    st.light_raw = light[0];
-  }
-
-  /* ToF is I2C-heavy: refresh at its own slower rate */
-  if (tofOk_ && static_cast<int32_t>(HAL_GetTick() - nextTofTick_) >= 0)
-  {
-    nextTofTick_ += kTofPeriodMs;
-    static RANGING_SENSOR_Result_t result;
-    if (BSP_RANGING_SENSOR_GetDistance(0, &result) == BSP_ERROR_NONE)
-    {
-      st.tof_mm = static_cast<uint16_t>(result.ZoneResult[0].Distance[0]);
-      st.tof_ok = 1;
-    }
-    else
-    {
-      st.tof_ok = 0;
-    }
   }
 
   /* Audio level from the live circular DMA buffer */
@@ -548,17 +768,6 @@ void Service::collect(FullStatus &st)
     }
   }
 
-  /* Memory statistics */
-  struct mallinfo mi = mallinfo();
-  uint32_t staticRam = reinterpret_cast<uint32_t>(&_end) - 0x30000000UL;
-  st.heap_used = static_cast<uint32_t>(mi.uordblks);
-  st.heap_free = static_cast<uint32_t>(mi.fordblks);
-  st.ram_used = staticRam + st.heap_used;
-  st.ram_total = 256U * 1024U;
-  st.flash_used = (reinterpret_cast<uint32_t>(&_etext) - 0x0C000000UL) +
-                  (reinterpret_cast<uint32_t>(&_edata) - reinterpret_cast<uint32_t>(&_sdata));
-  st.flash_total = 1024U * 1024U;
-
   st.ble_alive = bleLinkOk ? 1U : 0U;
 }
 
@@ -570,7 +779,8 @@ void Service::sendUart(const FullStatus &st)
                             frame, sizeof(frame));
   if (len > 0U)
   {
-    (void)HAL_UART_Transmit(&huart1, frame, static_cast<uint16_t>(len), 100);
+    /* drop the frame when the previous one is still in flight */
+    (void)uartSendAsync(frame, len, 0);
   }
 }
 
@@ -588,8 +798,20 @@ void Service::sendBle(const FullStatus &st)
   mini.press_x10 = static_cast<uint16_t>(st.press_x100 / 10U);
   mini.light_raw16 = static_cast<uint16_t>(st.light_raw > 0xFFFFU ? 0xFFFFU : st.light_raw);
   mini.tof_mm = st.tof_mm;
-  int32_t lvl = st.audio_rms / 128; /* 0..255 rough scale */
-  mini.audio_level = static_cast<uint8_t>(lvl > 255 ? 255 : lvl);
+  for (int i = 0; i < 3; i++)
+  {
+    mini.acc_mg[i] = st.acc_mg[i];
+    mini.gyro_dps10[i] = st.gyro_dps10[i];
+    mini.mag_mgauss[i] = st.mag_mgauss[i];
+  }
+  mini.audio_rms = st.audio_rms;
+  mini.audio_peak = st.audio_peak;
+  mini.uptime_s = static_cast<uint16_t>(st.uptime_ms / 1000U);
+  mini.die_temp_x100 = st.die_temp_x100;
+  mini.flags = static_cast<uint8_t>((st.ble_alive != 0U ? 1U : 0U) |
+                                    (st.wifi_alive != 0U ? 2U : 0U) |
+                                    (st.tof_ok != 0U ? 4U : 0U));
+  mini.cpu_load_pct = st.cpu_load_pct;
 
   stm32wb_at_BLE_NOTIF_VAL_t notif = {};
   notif.svc_index = 1; /* P2P server */
@@ -620,8 +842,17 @@ void Service::sendTcp(const FullStatus &st)
                                        static_cast<int32_t>(len), 0);
     if (sent <= 0)
     {
-      printf("[TLM] TCP send failed (%ld), dropping client\r\n", (long)sent);
-      tcpCloseClient();
+      /* one transient failure is tolerated; two in a row = client gone */
+      tcpSendFails++;
+      printf("[TLM] TCP send failed (%ld), fail#%lu\r\n", (long)sent, tcpSendFails);
+      if (tcpSendFails >= 2U)
+      {
+        tcpCloseClient();
+      }
+    }
+    else
+    {
+      tcpSendFails = 0;
     }
   }
 }
@@ -643,7 +874,7 @@ void Service::pollTcp()
     {
       return;
     }
-    nextAcceptTick = now + 1000U;
+    nextAcceptTick = now + 5000U; /* module-side accept blocks ~300 ms */
 
     /* A pending console key must win over the ~10 s blocking accept,
      * otherwise the interactive commands become unusable */
@@ -703,8 +934,19 @@ void Service::pollTcp()
                                   reinterpret_cast<const uint8_t *>(msg),
                                   static_cast<int32_t>(strlen(msg)), 0);
       }
+      else if (c == 'a' || c == 'A')
+      {
+        setAudioStream(true);
+      }
+      else if (c == 's' || c == 'S')
+      {
+        setAudioStream(false);
+      }
     }
   }
+  /* Note: recv error codes are unreliable for disconnect detection (the
+   * module returns generic errors on a mere receive timeout) - the send
+   * path in sendTcp() is the disconnect authority. */
 }
 
 void Service::setAudioStream(bool enable)
@@ -716,6 +958,13 @@ void Service::setAudioStream(bool enable)
 
 void Service::poll()
 {
+  /* One-shot phase profile: accumulated per second, printed once (temporary
+   * diagnostic for the frame-rate ceiling) */
+  static uint32_t profCollect = 0, profUart = 0, profBle = 0, profTcp = 0;
+  static uint32_t profStart = 0, profPrints = 0;
+  static uint32_t profFrames = 0, profLoops = 0;
+
+  loopCount_++;
   uint32_t now = HAL_GetTick();
   if (static_cast<int32_t>(now - nextFullTick_) >= 0)
   {
@@ -726,16 +975,44 @@ void Service::poll()
     {
       nextFullTick_ = now + kFullPeriodMs;
     }
+    uint32_t t0 = HAL_GetTick();
     collect(status_);
+    uint32_t t1 = HAL_GetTick();
     sendUart(status_);
+    uint32_t t2 = HAL_GetTick();
     sendTcp(status_);
+    profCollect += t1 - t0;
+    profUart += t2 - t1;
+    profTcp += HAL_GetTick() - t2;
+    profFrames++;
   }
+  profLoops++;
   if (static_cast<int32_t>(now - nextBleTick_) >= 0)
   {
     nextBleTick_ += kBlePeriodMs;
+    uint32_t t0 = HAL_GetTick();
     sendBle(status_);
+    profBle += HAL_GetTick() - t0;
   }
-  pollTcp();
+  {
+    uint32_t t0 = HAL_GetTick();
+    pollTcp();
+    profTcp += HAL_GetTick() - t0;
+  }
+
+  if (profStart == 0U)
+  {
+    profStart = now;
+  }
+  else if (now - profStart >= 2000U && profPrints < 3U)
+  {
+    profPrints++;
+    printf("[PROF] per2s: collect=%lums uart=%lums ble=%lums tcp=%lums frames=%lu loops=%lu\r\n",
+           profCollect, profUart, profBle, profTcp, profFrames, profLoops);
+    profCollect = profUart = profBle = profTcp = 0;
+    profFrames = profLoops = 0;
+    profStart = now;
+  }
 
   /* PCM streaming: forward each ready buffer half as two 512-sample frames */
   if (audioStream_)
@@ -754,7 +1031,13 @@ void Service::poll()
             audioFrame, sizeof(audioFrame));
         if (len > 0U)
         {
-          (void)HAL_UART_Transmit(&huart1, audioFrame, static_cast<uint16_t>(len), 100);
+          /* audio must not drop: wait for the in-flight frame (<= 12 ms) */
+          (void)uartSendAsync(audioFrame, len, 15);
+          if (tcpClientFd >= 0)
+          {
+            (void)MX_WIFI_Socket_send(wifi_obj_get(), tcpClientFd, audioFrame,
+                                      static_cast<int32_t>(len), 0);
+          }
         }
       }
     }
@@ -814,6 +1097,14 @@ extern "C" void stm32wb_at_ll_Async_receive(uint8_t new_frame)
 {
   (void)new_frame;
   (void)HAL_UART_Receive_IT(&huart4, &telemetry::bleRxByte, 1);
+}
+
+extern "C" void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    telemetry::uartTxBusy = false;
+  }
 }
 
 extern "C" void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)

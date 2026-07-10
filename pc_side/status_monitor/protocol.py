@@ -19,9 +19,13 @@ CMD_STATUS_MINI = 0x02
 CMD_AUDIO = 0x03  # 512 x int16 PCM samples (16 kHz mono), little endian
 
 FULL_FMT = "<BBIhHI3h3h3hIHBhh32hBB6I"
-FULL_SIZE = struct.calcsize(FULL_FMT)  # 133
+FULL_SIZE = struct.calcsize(FULL_FMT)  # 133 (v1)
+FULL_FMT_V2 = FULL_FMT + "hHIIBBH3II"
+FULL_SIZE_V2 = struct.calcsize(FULL_FMT_V2)  # 165 (v2: + MCU details)
 MINI_FMT = "<BhHHHHB"
-MINI_SIZE = struct.calcsize(MINI_FMT)  # 12
+MINI_SIZE = struct.calcsize(MINI_FMT)  # 12 (v1)
+MINI_FMT_V2 = "<BhHHHH3h3h3hhhHhBB"
+MINI_SIZE_V2 = struct.calcsize(MINI_FMT_V2)  # 39 (v2: all sensors)
 
 AUDIO_SAMPLE_RATE = 16000
 
@@ -66,13 +70,62 @@ class Status:
     heap_free: int = 0
     flash_used: int = 0
     flash_total: int = 0
+    # v2 MCU details
+    die_temp_c: float = 0.0
+    vdda_mv: int = 0
+    sysclk_hz: int = 0
+    hclk_hz: int = 0
+    reset_cause: int = 0
+    cpu_load_pct: int = 0
+    flash_kb: int = 0
+    uid: str = ""
+    idcode: int = 0
     compact: bool = False
 
 
 def decode_status(cmd: int, payload: bytes) -> Optional[Status]:
+    if cmd == CMD_STATUS and len(payload) == FULL_SIZE_V2:
+        v = struct.unpack(FULL_FMT_V2, payload)
+        st = _full_v1(v)
+        st.die_temp_c = v[60] / 100.0
+        st.vdda_mv = v[61]
+        st.sysclk_hz = v[62]
+        st.hclk_hz = v[63]
+        st.reset_cause = v[64]
+        st.cpu_load_pct = v[65]
+        st.flash_kb = v[66]
+        st.uid = f"{v[67]:08X}-{v[68]:08X}-{v[69]:08X}"
+        st.idcode = v[70]
+        return st
     if cmd == CMD_STATUS and len(payload) == FULL_SIZE:
-        v = struct.unpack(FULL_FMT, payload)
+        return _full_v1(struct.unpack(FULL_FMT, payload))
+    if cmd == CMD_STATUS_MINI and len(payload) == MINI_SIZE_V2:
+        v = struct.unpack(MINI_FMT_V2, payload)
         return Status(
+            button=bool(v[0]),
+            temp_c=v[1] / 100.0,
+            humidity=v[2] / 100.0,
+            pressure_hpa=v[3] / 10.0,
+            light_raw=v[4],
+            tof_mm=v[5],
+            acc_mg=(v[6], v[7], v[8]),
+            gyro_dps=(v[9] / 10.0, v[10] / 10.0, v[11] / 10.0),
+            mag_mgauss=(v[12], v[13], v[14]),
+            audio_rms=v[15],
+            audio_peak=v[16],
+            uptime_ms=v[17] * 1000,
+            die_temp_c=v[18] / 100.0,
+            ble_alive=bool(v[19] & 1),
+            wifi_alive=bool(v[19] & 2),
+            tof_ok=bool(v[19] & 4),
+            cpu_load_pct=v[20],
+            compact=True,
+        )
+    return _decode_v1_extra(cmd, payload)
+
+
+def _full_v1(v: tuple) -> Status:
+    return Status(
             uptime_ms=v[2],
             button=bool(v[1]),
             temp_c=v[3] / 100.0,
@@ -95,7 +148,10 @@ def decode_status(cmd: int, payload: bytes) -> Optional[Status]:
             heap_free=v[57],
             flash_used=v[58],
             flash_total=v[59],
-        )
+    )
+
+
+def _decode_v1_extra(cmd: int, payload: bytes) -> Optional[Status]:
     if cmd == CMD_STATUS_MINI and len(payload) == MINI_SIZE:
         v = struct.unpack(MINI_FMT, payload)
         return Status(

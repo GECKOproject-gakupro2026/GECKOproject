@@ -779,6 +779,9 @@ static int32_t VEML3235_Pwr_On(VEML3235_Object_t *pObj)
   else
   {
     config &= ~VEML3235_CONF_SHUTDOWN0;
+    /* Patched for this project: also clear SD_ALS (bit15) - the ALS channel
+     * has its own shutdown bit and reads 0 counts forever if left set */
+    config &= (uint16_t)~0x8000U;
     ret = VEML3235_OK ;
     if (veml3235_write_reg(&pObj->Ctx, VEML3235_REG_ALS_CONF, &config, 2) != 0)
     {
