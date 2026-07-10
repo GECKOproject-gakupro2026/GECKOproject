@@ -27,9 +27,44 @@ extern "C" {
 #define FRAME_MAX_PAYLOAD      1024U
 
 /* Command IDs (11.2 + telemetry extensions) */
-#define FRAME_CMD_STATUS       0x01U   /* full telemetry (UART)              */
+#define FRAME_CMD_STATUS       0x01U   /* full telemetry (UART/TCP)          */
 #define FRAME_CMD_STATUS_MINI  0x02U   /* compact telemetry (BLE notify)     */
 #define FRAME_CMD_AUDIO        0x03U   /* PCM audio block (512 x int16, LE)  */
+#define FRAME_CMD_FW_CHUNK     0x04U   /* PC->board: offset u32 + data       */
+#define FRAME_CMD_FW_COMPLETE  0x05U   /* PC->board: size u32 + crc16 u16    */
+#define FRAME_CMD_STATUS_REQ   0x06U   /* PC->board: query OTA state         */
+#define FRAME_CMD_STATUS_RESP  0x07U   /* board->PC: OTA state report        */
+#define FRAME_CMD_ACK          0x7EU   /* {orig_cmd, orig_seq, u32 arg}      */
+#define FRAME_CMD_NACK         0x7FU   /* {orig_cmd, orig_seq, u8 error}     */
+
+/* NACK error codes */
+#define FRAME_ERR_BAD_OFFSET   1U
+#define FRAME_ERR_ERASE        2U
+#define FRAME_ERR_WRITE        3U
+#define FRAME_ERR_VERIFY       4U
+#define FRAME_ERR_TOO_LARGE    5U
+#define FRAME_ERR_BAD_STATE    6U
+
+/* Streaming decoder for inbound frames. Bytes that are not part of a frame
+ * are reported back to the caller so single-character console commands keep
+ * working on the same link. */
+typedef struct
+{
+  uint8_t buf[FRAME_MAX_PAYLOAD + FRAME_OVERHEAD];
+  uint16_t pos;
+} Frame_Decoder;
+
+typedef enum
+{
+  FRAME_FEED_CONSUMED = 0, /* byte buffered, no event yet                */
+  FRAME_FEED_COMPLETE = 1, /* full valid frame: out params are set       */
+  FRAME_FEED_PLAIN = 2     /* byte is not frame data - treat as console  */
+} Frame_FeedResult;
+
+void Frame_DecoderInit(Frame_Decoder *dec);
+Frame_FeedResult Frame_DecoderFeed(Frame_Decoder *dec, uint8_t byte,
+                                   uint8_t *cmd, uint8_t *seq,
+                                   const uint8_t **payload, uint16_t *len);
 
 uint16_t Frame_Crc16(const uint8_t *data, size_t len);
 

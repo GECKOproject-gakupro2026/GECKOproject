@@ -17,6 +17,16 @@ EOF = 0x55
 CMD_STATUS = 0x01
 CMD_STATUS_MINI = 0x02
 CMD_AUDIO = 0x03  # 512 x int16 PCM samples (16 kHz mono), little endian
+CMD_FW_CHUNK = 0x04     # PC->board: offset u32 + data
+CMD_FW_COMPLETE = 0x05  # PC->board: size u32 + crc16 u16
+CMD_STATUS_REQ = 0x06   # PC->board: query OTA state
+CMD_STATUS_RESP = 0x07  # board->PC: "<BIIHB" state/received/expected/crc/err
+CMD_ACK = 0x7E          # "<BBI" orig_cmd/orig_seq/arg
+CMD_NACK = 0x7F         # "<BBB" orig_cmd/orig_seq/error
+
+NACK_ERRORS = {1: "BAD_OFFSET", 2: "ERASE", 3: "WRITE", 4: "VERIFY",
+               5: "TOO_LARGE", 6: "BAD_STATE"}
+OTA_STATES = {0: "Idle", 1: "Receiving", 2: "Staged", 3: "Error"}
 
 FULL_FMT = "<BBIhHI3h3h3hIHBhh32hBB6I"
 FULL_SIZE = struct.calcsize(FULL_FMT)  # 133 (v1)
@@ -34,6 +44,14 @@ def decode_audio(payload: bytes) -> list[int]:
     """CMD_AUDIO payload -> list of int16 PCM samples."""
     count = len(payload) // 2
     return list(struct.unpack(f"<{count}h", payload[: count * 2]))
+
+
+def build_frame(cmd: int, seq: int, payload: bytes = b"") -> bytes:
+    """Encode a command frame (same wire format the firmware emits)."""
+    head = bytes([SOF, cmd, seq & 0xFF, len(payload) & 0xFF, len(payload) >> 8])
+    body = head + payload
+    crc = crc16_ccitt(body)
+    return body + bytes([crc & 0xFF, crc >> 8, EOF])
 
 
 def crc16_ccitt(data: bytes) -> int:

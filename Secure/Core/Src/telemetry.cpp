@@ -9,6 +9,7 @@
 #include "app_config.h"
 #include "frame_codec.h"
 #include "main.h"
+#include "ota.hpp"
 
 #include "b_u585i_iot02a.h"
 #include "b_u585i_iot02a_audio.h"
@@ -174,6 +175,12 @@ int32_t tcpListenFd = -1;
 int32_t tcpClientFd = -1;
 uint32_t nextAcceptTick = 0;
 uint32_t tcpSendFails = 0;
+
+/* OTA staging + per-link inbound frame decoders */
+ota::Manager otaMgr;
+Frame_Decoder uartDecoder = {};
+Frame_Decoder tcpDecoder = {};
+uint8_t respSeq = 0;
 
 constexpr uint16_t mxHtons(uint16_t v)
 {
@@ -918,7 +925,12 @@ void Service::pollTcp()
   {
     for (int32_t i = 0; i < n; i++)
     {
-      char c = static_cast<char>(buf[i]);
+      int plain = processRxByte(buf[i], true);
+      if (plain < 0)
+      {
+        continue; /* consumed by the frame layer (OTA & co.) */
+      }
+      char c = static_cast<char>(plain);
       if (c == 'p' || c == 'P')
       {
         char msg[48];
@@ -954,6 +966,101 @@ void Service::setAudioStream(bool enable)
   audioStream_ = enable && audioOk_;
   g_AudioEvents = 0;
   printf("[TLM] audio streaming %s\r\n", audioStream_ ? "ON (16kHz mono)" : "OFF");
+}
+
+void Service::sendResponse(bool fromTcp, uint8_t cmd, const uint8_t *payload,
+                           uint16_t len)
+{
+  uint8_t frame[64];
+  size_t n = Frame_Encode(cmd, respSeq++, payload, len, frame, sizeof(frame));
+  if (n == 0U)
+  {
+    return;
+  }
+  if (fromTcp)
+  {
+    if (tcpClientFd >= 0)
+    {
+      (void)MX_WIFI_Socket_send(wifi_obj_get(), tcpClientFd, frame,
+                                static_cast<int32_t>(n), 0);
+    }
+  }
+  else
+  {
+    (void)uartSendAsync(frame, n, 20);
+  }
+}
+
+void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
+                          uint16_t len, bool fromTcp)
+{
+  struct __attribute__((packed)) AckPayload
+  {
+    uint8_t orig_cmd;
+    uint8_t orig_seq;
+    uint32_t arg;
+  };
+  struct __attribute__((packed)) NackPayload
+  {
+    uint8_t orig_cmd;
+    uint8_t orig_seq;
+    uint8_t error;
+  };
+
+  switch (cmd)
+  {
+    case FRAME_CMD_FW_CHUNK:
+    case FRAME_CMD_FW_COMPLETE:
+    {
+      uint8_t err = (cmd == FRAME_CMD_FW_CHUNK)
+                        ? otaMgr.writeChunk(payload, len)
+                        : otaMgr.complete(payload, len);
+      if (err == 0U)
+      {
+        ota::StatusReport rep;
+        otaMgr.fillReport(rep);
+        AckPayload ack = {cmd, seq, rep.received};
+        sendResponse(fromTcp, FRAME_CMD_ACK,
+                     reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
+      }
+      else
+      {
+        NackPayload nack = {cmd, seq, err};
+        sendResponse(fromTcp, FRAME_CMD_NACK,
+                     reinterpret_cast<const uint8_t *>(&nack), sizeof(nack));
+      }
+      break;
+    }
+    case FRAME_CMD_STATUS_REQ:
+    {
+      ota::StatusReport rep;
+      otaMgr.fillReport(rep);
+      sendResponse(fromTcp, FRAME_CMD_STATUS_RESP,
+                   reinterpret_cast<const uint8_t *>(&rep), sizeof(rep));
+      break;
+    }
+    default:
+      break; /* unknown inbound command: ignore */
+  }
+}
+
+int Service::processRxByte(uint8_t byte, bool fromTcp)
+{
+  Frame_Decoder &dec = fromTcp ? tcpDecoder : uartDecoder;
+  uint8_t cmd = 0;
+  uint8_t seq = 0;
+  const uint8_t *payload = nullptr;
+  uint16_t len = 0;
+  switch (Frame_DecoderFeed(&dec, byte, &cmd, &seq, &payload, &len))
+  {
+    case FRAME_FEED_COMPLETE:
+      handleFrame(cmd, seq, payload, len, fromTcp);
+      return -1;
+    case FRAME_FEED_PLAIN:
+      return byte;
+    default:
+      return -1;
+  }
 }
 
 void Service::poll()

@@ -93,7 +93,16 @@ public:
   void setAudioStream(bool enable);
   bool audioStreamEnabled() const { return audioStream_; }
 
+  /* Feeds one inbound byte (UART console or TCP). Frame bytes (OTA & co.)
+   * are consumed internally and -1 is returned; otherwise the byte comes
+   * back for the legacy single-character command handling. */
+  int processRxByte(uint8_t byte, bool fromTcp);
+
 private:
+  void handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
+                   uint16_t len, bool fromTcp);
+  void sendResponse(bool fromTcp, uint8_t cmd, const uint8_t *payload,
+                    uint16_t len);
   void initSensors();
   void initAudio();
   void initRadio();

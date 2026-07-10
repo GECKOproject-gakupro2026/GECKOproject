@@ -45,3 +45,53 @@ size_t Frame_Encode(uint8_t cmd, uint8_t seq, const uint8_t *payload,
   out[7U + payload_len] = FRAME_EOF;
   return payload_len + FRAME_OVERHEAD;
 }
+
+void Frame_DecoderInit(Frame_Decoder *dec)
+{
+  dec->pos = 0;
+}
+
+Frame_FeedResult Frame_DecoderFeed(Frame_Decoder *dec, uint8_t byte,
+                                   uint8_t *cmd, uint8_t *seq,
+                                   const uint8_t **payload, uint16_t *len)
+{
+  if (dec->pos == 0U)
+  {
+    if (byte != FRAME_SOF)
+    {
+      return FRAME_FEED_PLAIN;
+    }
+    dec->buf[dec->pos++] = byte;
+    return FRAME_FEED_CONSUMED;
+  }
+
+  dec->buf[dec->pos++] = byte;
+
+  if (dec->pos >= 5U)
+  {
+    uint16_t plen = (uint16_t)(dec->buf[3] | ((uint16_t)dec->buf[4] << 8));
+    if (plen > FRAME_MAX_PAYLOAD)
+    {
+      dec->pos = 0; /* corrupt header: resync */
+      return FRAME_FEED_CONSUMED;
+    }
+    uint16_t total = (uint16_t)(plen + FRAME_OVERHEAD);
+    if (dec->pos == total)
+    {
+      uint16_t rxCrc = (uint16_t)(dec->buf[5U + plen] |
+                                  ((uint16_t)dec->buf[6U + plen] << 8));
+      dec->pos = 0;
+      if (dec->buf[total - 1U] == FRAME_EOF &&
+          rxCrc == Frame_Crc16(dec->buf, 5U + plen))
+      {
+        *cmd = dec->buf[1];
+        *seq = dec->buf[2];
+        *payload = &dec->buf[5];
+        *len = plen;
+        return FRAME_FEED_COMPLETE;
+      }
+      return FRAME_FEED_CONSUMED; /* bad CRC/EOF: drop silently */
+    }
+  }
+  return FRAME_FEED_CONSUMED;
+}

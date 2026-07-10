@@ -90,6 +90,11 @@ extern "C" void App_Main(void)
     service.poll();
 
     int key = Console_GetChar(0);
+    if (key >= 0)
+    {
+      /* frame bytes (OTA & co.) are consumed inside; plain chars come back */
+      key = service.processRxByte(static_cast<uint8_t>(key), false);
+    }
     if (key == 't' || key == 'T')
     {
       printf("\r\n[APP] pausing telemetry, running the hardware test suite...\r\n");
