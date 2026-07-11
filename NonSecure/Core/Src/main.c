@@ -34,7 +34,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   2U
+#define NS_APP_VERSION   3U
 
 /* User LEDs on this board: LD6 red = PH6, LD7 green = PH7 */
 #define LED_RED_PIN      GPIO_PIN_6
@@ -91,13 +91,13 @@ static void led_init(void)
   HAL_GPIO_Init(LED_PORT, &gpio);
 }
 
-/* OTA demonstration image: LD6/red remains off while LD7/green stays on. */
+/* OTA demonstration v3: LD6/red remains off while LD7/green blinks at 2 Hz. */
 static void led_show_version(uint32_t version)
 {
   HAL_GPIO_WritePin(LED_PORT, LED_RED_PIN, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(LED_PORT, LED_GREEN_PIN, GPIO_PIN_SET);
+  HAL_GPIO_TogglePin(LED_PORT, LED_GREEN_PIN);
   (void)version;
-  HAL_Delay(1000);
+  HAL_Delay(250);
 }
 /* USER CODE END 0 */
 
