@@ -977,6 +977,12 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOF_CLK_ENABLE();
 
+  /* The OTA NonSecure LED demo drives both user LED pins directly.  Keep
+   * GPIOH secure configuration for the rest of the port, but release PH6/PH7
+   * explicitly; without this, PH6 remains secure and only one LED responds
+   * after the Secure-to-NonSecure jump. */
+  HAL_GPIO_ConfigPinAttributes(GPIOH, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_NSEC);
+
   /*Configure GPIO pin : MIC_CCK1_Pin */
   GPIO_InitStruct.Pin = MIC_CCK1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
