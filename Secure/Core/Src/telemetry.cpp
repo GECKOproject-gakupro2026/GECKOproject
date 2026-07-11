@@ -34,6 +34,7 @@ extern UART_HandleTypeDef huart1; /* VCP console / telemetry stream */
 extern UART_HandleTypeDef huart4; /* STM32WB5MMG BLE module (AT server) */
 extern "C" SPI_HandleTypeDef hspi2; /* EMW3080 Wi-Fi module */
 extern "C" void Secure_JumpToNonSecure(void);
+extern "C" void BootGuard_ConfirmBoot(void); /* boot_guard.cpp, OTA Phase 2 */
 
 /* CubeMX-generated ADF1 handle (main.c), released before the BSP takes over */
 extern "C" MDF_HandleTypeDef AdfHandle0;
@@ -1043,6 +1044,9 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
       HAL_Delay(300U);
       printf("[OTA] launching NonSecure application at 0x08100000\r\n");
       HAL_Delay(50U);
+      /* Freshly-applied image: don't inherit the previous image's failed
+       * boot count (OTA Phase 2 rollback guard, see boot_guard.hpp). */
+      BootGuard_ConfirmBoot();
       Secure_JumpToNonSecure();
       break;
     }

@@ -115,6 +115,14 @@ static int NonSecure_ImageIsValid(void)
                            version != 0U && version != 0xFFFFFFFFU;
   return stackValid && resetValid && appInfoValid;
 }
+
+/* OTA Phase 2: BootGuard rollback. boot_guard.cpp/ota.cpp bridges (plain-C
+ * callable) - see boot_guard.hpp for the counter's semantics. */
+extern uint32_t BootGuard_AttemptCount(void);
+extern void BootGuard_NoteBootAttempt(void);
+extern void BootGuard_ConfirmBoot(void);
+extern int OTA_RestoreFromBackup(void);
+#define BOOT_GUARD_MAX_ATTEMPTS  3U
 /* USER CODE END 0 */
 
 /**
@@ -157,11 +165,37 @@ int main(void)
   /* Secure Stage-0 boot decision:
    * - valid Bank2 image + button released: launch the NonSecure application
    * - button held, or invalid/missing image: remain in the Wi-Fi OTA loader
-   * The button is sampled before the slower sensor/radio initialization. */
+   * The button is sampled before the slower sensor/radio initialization.
+   *
+   * OTA Phase 2 rollback guard: BootGuard's TAMP->BKP0R counter survives a
+   * warm reset. If NonSecure never calls Secure_ConfirmBoot() (crash, hang,
+   * bad image that still passes the static checks) the counter keeps
+   * climbing across resets; once it reaches BOOT_GUARD_MAX_ATTEMPTS, Stage-0
+   * restores the last-known-good image from NOR backup slot B into Bank2
+   * before trying again, instead of retrying the same bad image forever. */
+  if (BootGuard_AttemptCount() >= BOOT_GUARD_MAX_ATTEMPTS)
+  {
+    printf("[BOOT] %lu failed boot attempts, restoring Bank2 from NOR backup...\r\n",
+           (unsigned long)BootGuard_AttemptCount());
+    if (OTA_RestoreFromBackup())
+    {
+      printf("[BOOT] rollback succeeded, resetting attempt counter\r\n");
+    }
+    else
+    {
+      printf("[BOOT] rollback failed or no backup available, staying in OTA loader\r\n");
+    }
+    /* Either way, clear the counter: a successful rollback earns the
+     * restored image a fresh set of attempts, and a failed rollback means
+     * there's nothing left to retry against - the loader stays resident. */
+    BootGuard_ConfirmBoot();
+  }
+
   (void)BSP_PB_Init(BUTTON_USER, BUTTON_MODE_GPIO);
   HAL_Delay(20U);
   if (NonSecure_ImageIsValid() && BSP_PB_GetState(BUTTON_USER) == 0)
   {
+    BootGuard_NoteBootAttempt();
     Secure_JumpToNonSecure();
   }
 

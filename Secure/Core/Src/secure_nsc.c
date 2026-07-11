@@ -22,6 +22,10 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "secure_nsc.h"
+
+/* Implemented in boot_guard.cpp (C++); confirmBoot() itself is C++-only
+ * (namespaced), so this thin extern "C" wrapper is what secure_nsc.c calls. */
+extern void BootGuard_ConfirmBoot(void);
 /** @addtogroup STM32U5xx_HAL_Examples
 
   * @{
@@ -66,6 +70,16 @@ void *pSecureErrorCallback = NULL;   /* Pointer to secure error callback in Non-
         }
       }
     }
+
+/**
+  * @brief  Called by NonSecure once its own startup checks pass, to clear
+  *         the Stage-0 boot-attempt counter (OTA Phase 2 rollback guard).
+  * @retval None
+  */
+CMSE_NS_ENTRY void Secure_ConfirmBoot(void)
+{
+  BootGuard_ConfirmBoot();
+}
 
 /**
   * @}

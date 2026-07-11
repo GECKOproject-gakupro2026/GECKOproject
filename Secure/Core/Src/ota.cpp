@@ -22,6 +22,7 @@ namespace
 constexpr uint32_t kNsFlashBase = 0x08100000U;
 constexpr uint32_t kNsFlashSize = 0x00100000U;
 constexpr uint32_t kFlashPageSize = 0x2000U;
+constexpr uint32_t kBackupMetaMagic = 0x42544D45U; /* "EMTB" */
 
 /* Incremental CRC-16/CCITT-FALSE (Frame_Crc16 == crc16Update(0xFFFF, ...)) */
 uint16_t crc16Update(uint16_t crc, const uint8_t *data, size_t len)
@@ -34,6 +35,16 @@ uint16_t crc16Update(uint16_t crc, const uint8_t *data, size_t len)
       crc = (crc & 0x8000U) ? (uint16_t)((crc << 1) ^ 0x1021U) : (uint16_t)(crc << 1);
     }
   }
+  return crc;
+}
+
+uint16_t metaSelfCrc(const SlotMeta &m)
+{
+  uint16_t crc = 0xFFFFU;
+  crc = crc16Update(crc, reinterpret_cast<const uint8_t *>(&m.magic), sizeof(m.magic));
+  crc = crc16Update(crc, reinterpret_cast<const uint8_t *>(&m.size), sizeof(m.size));
+  crc = crc16Update(crc, reinterpret_cast<const uint8_t *>(&m.crc16), sizeof(m.crc16));
+  crc = crc16Update(crc, reinterpret_cast<const uint8_t *>(&m.version), sizeof(m.version));
   return crc;
 }
 } // namespace
@@ -57,11 +68,186 @@ bool Manager::validateNonSecureImage()
   return stackOk && resetOk;
 }
 
+bool Manager::backupCurrentBank2()
+{
+  /* Snapshot the currently-running Bank2 image (if any) into NOR slot B
+   * before overwriting Bank2, so a bad update can be rolled back. If Bank2
+   * doesn't hold a valid image yet (first-ever apply), skip the backup -
+   * there's nothing good to preserve. */
+  const uint32_t sp = *reinterpret_cast<const uint32_t *>(kNsFlashBase);
+  const uint32_t reset = *reinterpret_cast<const uint32_t *>(kNsFlashBase + 4U);
+  const uint32_t magic = *reinterpret_cast<const uint32_t *>(kNsFlashBase + 0x400U);
+  const uint32_t version = *reinterpret_cast<const uint32_t *>(kNsFlashBase + 0x404U);
+  const bool spOk = sp >= 0x20040000U && sp <= 0x200C0000U;
+  const bool resetOk = (reset & 1U) != 0U &&
+                       (reset & ~1U) >= kNsFlashBase &&
+                       (reset & ~1U) < (kNsFlashBase + kNsFlashSize);
+  if (!spOk || !resetOk || magic != 0x4E534150U /* "NSAP" */ ||
+      version == 0U || version == 0xFFFFFFFFU)
+  {
+    printf("[OTA] Bank2 has no valid image yet, skipping backup\r\n");
+    return true; /* not an error - just nothing to back up */
+  }
+
+  printf("[OTA] backing up current Bank2 (v%lu) to NOR slot B...\r\n",
+         (unsigned long)version);
+  for (uint32_t off = 0; off < kBackupMetaOffset; off += kEraseBlock)
+  {
+    if (BSP_OSPI_NOR_Erase_Block(0, kBackupBase + off, BSP_OSPI_NOR_ERASE_64K) !=
+        BSP_ERROR_NONE)
+    {
+      return false;
+    }
+    while (BSP_OSPI_NOR_GetStatus(0) == BSP_ERROR_BUSY)
+    {
+      HAL_Delay(5);
+    }
+  }
+  if (BSP_OSPI_NOR_Write(0, reinterpret_cast<const uint8_t *>(kNsFlashBase),
+                         kBackupBase, kNsFlashSize) != BSP_ERROR_NONE)
+  {
+    return false;
+  }
+
+  SlotMeta meta = {};
+  meta.magic = kBackupMetaMagic;
+  meta.size = kNsFlashSize;
+  meta.crc16 = crc16Update(0xFFFFU,
+      reinterpret_cast<const uint8_t *>(kNsFlashBase), kNsFlashSize);
+  meta.version = version;
+  meta.selfCrc = metaSelfCrc(meta);
+  if (BSP_OSPI_NOR_Erase_Block(0, kBackupBase + kBackupMetaOffset,
+                               BSP_OSPI_NOR_ERASE_64K) != BSP_ERROR_NONE)
+  {
+    return false;
+  }
+  while (BSP_OSPI_NOR_GetStatus(0) == BSP_ERROR_BUSY)
+  {
+    HAL_Delay(5);
+  }
+  /* write the meta twice (primary + mirror) within the same erased block */
+  if (BSP_OSPI_NOR_Write(0, reinterpret_cast<const uint8_t *>(&meta),
+                         kBackupBase + kBackupMetaOffset, sizeof(meta)) != BSP_ERROR_NONE ||
+      BSP_OSPI_NOR_Write(0, reinterpret_cast<const uint8_t *>(&meta),
+                         kBackupBase + kBackupMetaOffset + sizeof(meta), sizeof(meta)) !=
+          BSP_ERROR_NONE)
+  {
+    return false;
+  }
+  printf("[OTA] Bank2 backup complete, crc=0x%04X\r\n", meta.crc16);
+  return true;
+}
+
+bool Manager::readBackupMeta(SlotMeta &meta)
+{
+  SlotMeta primary = {};
+  SlotMeta mirror = {};
+  if (BSP_OSPI_NOR_Read(0, reinterpret_cast<uint8_t *>(&primary),
+                        kBackupBase + kBackupMetaOffset, sizeof(primary)) != BSP_ERROR_NONE)
+  {
+    return false;
+  }
+  if (BSP_OSPI_NOR_Read(0, reinterpret_cast<uint8_t *>(&mirror),
+                        kBackupBase + kBackupMetaOffset + sizeof(primary), sizeof(mirror)) !=
+      BSP_ERROR_NONE)
+  {
+    return false;
+  }
+  const bool primaryOk = primary.magic == kBackupMetaMagic &&
+                         primary.selfCrc == metaSelfCrc(primary);
+  const bool mirrorOk = mirror.magic == kBackupMetaMagic &&
+                        mirror.selfCrc == metaSelfCrc(mirror);
+  if (primaryOk)
+  {
+    meta = primary;
+    return true;
+  }
+  if (mirrorOk)
+  {
+    meta = mirror;
+    return true;
+  }
+  return false;
+}
+
+bool Manager::hasValidBackup()
+{
+  if (!ensureNorReady())
+  {
+    return false;
+  }
+  SlotMeta meta;
+  return readBackupMeta(meta) && meta.size > 0U && meta.size <= kNsFlashSize;
+}
+
+bool Manager::restoreFromBackup()
+{
+  if (!ensureNorReady())
+  {
+    return false;
+  }
+  SlotMeta meta;
+  if (!readBackupMeta(meta) || meta.size == 0U || meta.size > kNsFlashSize)
+  {
+    printf("[OTA] no valid backup slot to restore from\r\n");
+    return false;
+  }
+
+  printf("[OTA] restoring Bank2 from NOR backup slot B (v%lu, %lu bytes)...\r\n",
+         (unsigned long)meta.version, (unsigned long)meta.size);
+  HAL_FLASH_Unlock();
+  FLASH_EraseInitTypeDef erase = {};
+  erase.TypeErase = FLASH_TYPEERASE_PAGES_NS;
+  erase.Banks = FLASH_BANK_2;
+  erase.Page = 0U;
+  erase.NbPages = (meta.size + kFlashPageSize - 1U) / kFlashPageSize;
+  uint32_t pageError = 0xFFFFFFFFU;
+  if (HAL_FLASHEx_Erase(&erase, &pageError) != HAL_OK)
+  {
+    HAL_FLASH_Lock();
+    printf("[OTA] restore erase failed at page %lu\r\n", (unsigned long)pageError);
+    return false;
+  }
+
+  alignas(16) uint8_t quad[16];
+  for (uint32_t off = 0; off < meta.size; off += sizeof(quad))
+  {
+    memset(quad, 0xFF, sizeof(quad));
+    const uint32_t n = (meta.size - off) < sizeof(quad) ? (meta.size - off) : sizeof(quad);
+    if (BSP_OSPI_NOR_Read(0, quad, kBackupBase + off, n) != BSP_ERROR_NONE ||
+        HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD_NS, kNsFlashBase + off,
+                          reinterpret_cast<uint32_t>(quad)) != HAL_OK)
+    {
+      HAL_FLASH_Lock();
+      printf("[OTA] restore program failed at +0x%08lX\r\n", (unsigned long)off);
+      return false;
+    }
+  }
+  HAL_FLASH_Lock();
+
+  const uint16_t crc = crc16Update(0xFFFFU,
+      reinterpret_cast<const uint8_t *>(kNsFlashBase), meta.size);
+  if (crc != meta.crc16)
+  {
+    printf("[OTA] restore verify failed: 0x%04X != 0x%04X\r\n", crc, meta.crc16);
+    return false;
+  }
+  printf("[OTA] Bank2 restored from backup, crc=0x%04X\r\n", crc);
+  return true;
+}
+
 uint8_t Manager::applyToNonSecure()
 {
   if (!ensureNorReady() || !validateNonSecureImage())
   {
     lastError_ = FRAME_ERR_BAD_STATE;
+    return lastError_;
+  }
+
+  if (!backupCurrentBank2())
+  {
+    printf("[OTA] Bank2 backup failed, aborting apply (current image left intact)\r\n");
+    lastError_ = FRAME_ERR_WRITE;
     return lastError_;
   }
 
@@ -289,3 +475,18 @@ void Manager::reset()
 }
 
 } // namespace ota
+
+/* extern "C" bridge so main.c (Stage-0, plain C) can trigger a rollback
+ * without needing the full C++ Manager type. Uses a scratch instance since
+ * restoreFromBackup()/hasValidBackup() don't depend on transfer state. */
+extern "C" int OTA_RestoreFromBackup(void)
+{
+  ota::Manager mgr;
+  return mgr.restoreFromBackup() ? 1 : 0;
+}
+
+extern "C" int OTA_HasValidBackup(void)
+{
+  ota::Manager mgr;
+  return mgr.hasValidBackup() ? 1 : 0;
+}

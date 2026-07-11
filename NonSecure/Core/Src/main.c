@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "secure_nsc.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -34,7 +34,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   5U
+#define NS_APP_VERSION   9U
 
 /* User LEDs on this board: LD6 red = PH6, LD7 green = PH7 */
 #define LED_RED_PIN      GPIO_PIN_6
@@ -134,6 +134,10 @@ int main(void)
   led_init();
   /* Publish the running version for the Secure side / host tools */
   *(volatile uint32_t *)NS_RUNNING_VERSION_ADDR = g_ns_appinfo.version;
+  /* Startup reached the main loop without a fault: tell the Secure Stage-0
+   * loader this boot was good, clearing its rollback attempt counter (OTA
+   * Phase 2, see boot_guard.hpp on the Secure side). */
+  Secure_ConfirmBoot();
   /* USER CODE END 2 */
 
   /* Infinite loop */

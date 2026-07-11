@@ -3,8 +3,10 @@
   * @file    ota.hpp
   * @brief   OTA firmware staging: receives an image over the command frame
   *          protocol (11.2) and stores it in the external NOR flash firmware
-  *          area B (0x200000, memory map 11.3). Applying the staged image to
-  *          internal flash is the next phase (bootloader copy).
+  *          area B (0x200000, memory map 11.3). applyToNonSecure() copies the
+  *          staged candidate to internal Bank2, backing up the current good
+  *          Bank2 image to NOR slot B (0x400000) first so a failed boot can
+  *          be rolled back by the Stage-0 loader (see BootGuard in main.c).
   ******************************************************************************
   */
 #ifndef OTA_HPP
@@ -34,11 +36,27 @@ struct __attribute__((packed)) StatusReport
   uint8_t last_error;
 };
 
+/* Persisted in external NOR, two copies (primary + mirror) so a power loss
+ * mid-write leaves at least one intact copy. 32 bytes, self-CRC'd. */
+struct __attribute__((packed)) SlotMeta
+{
+  uint32_t magic;     /* 0x42544D45 = "EMTB" (backup slot marker) */
+  uint32_t size;
+  uint16_t crc16;
+  uint16_t reserved;
+  uint32_t version;
+  uint32_t selfCrc;    /* CRC16 (in low 16 bits) over the fields above */
+  uint8_t pad[16];
+};
+
 class Manager
 {
 public:
-  static constexpr uint32_t kStagingBase = 0x200000U; /* NOR FW area B */
-  static constexpr uint32_t kStagingSize = 0x200000U; /* 2 MB           */
+  static constexpr uint32_t kStagingBase = 0x200000U; /* NOR FW area A (candidate) */
+  static constexpr uint32_t kStagingSize = 0x200000U; /* 2 MB                      */
+  static constexpr uint32_t kBackupBase = 0x400000U;  /* NOR FW area B (last-good) */
+  static constexpr uint32_t kBackupSize = 0x200000U;  /* 2 MB                      */
+  static constexpr uint32_t kBackupMetaOffset = 0x1F0000U; /* meta lives at slot end */
   static constexpr uint32_t kEraseBlock = 0x10000U;   /* 64 KB blocks   */
 
   /* Handles one FW_CHUNK: payload = offset u32 LE + data.
@@ -51,6 +69,11 @@ public:
   uint8_t complete(const uint8_t *payload, uint16_t len);
   uint8_t applyToNonSecure();
 
+  /* Restores NOR backup slot B into internal Bank2. Used by the Stage-0
+   * BootGuard after repeated failed boots. Returns true on success. */
+  bool restoreFromBackup();
+  bool hasValidBackup();
+
   void fillReport(StatusReport &r) const;
   void reset();
 
@@ -58,6 +81,8 @@ private:
   bool ensureNorReady();
   bool validateNonSecureImage();
   uint8_t ensureErased(uint32_t endOffset);
+  bool backupCurrentBank2();
+  bool readBackupMeta(SlotMeta &meta);
 
   State state_ = State::Idle;
   uint32_t received_ = 0;

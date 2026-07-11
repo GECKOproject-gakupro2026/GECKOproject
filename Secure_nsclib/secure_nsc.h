@@ -40,6 +40,10 @@ SECURE_FAULT_CB_ID     = 0x00U, /*!< System secure fault callback ID */
 /* Exported functions ------------------------------------------------------- */
 void SECURE_RegisterCallback(SECURE_CallbackIDTypeDef CallbackId, void *func);
 
+/* OTA Phase 2: called by the NonSecure app once it has finished its own
+ * startup checks, to clear the Stage-0 boot-attempt counter (BootGuard). */
+void Secure_ConfirmBoot(void);
+
 #endif /* SECURE_NSC_H */
 /* USER CODE END Non_Secure_CallLib_h */
 
