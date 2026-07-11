@@ -28,7 +28,7 @@
 
 /* ---- Audio --------------------------------------------------------------- */
 #define CFG_AUDIO_SAMPLE_RATE    16000U
-#define CFG_AUDIO_REC_SAMPLES    4096U   /* samples per capture               */
+#define CFG_AUDIO_REC_SAMPLES    2048U   /* samples per capture; 128 ms @16 kHz */
 
 /* ---- EEPROM -------------------------------------------------------------- */
 #define CFG_EEPROM_TEST_ADDR     0x0100U /* byte address used by the R/W test */

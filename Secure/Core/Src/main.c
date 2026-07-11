@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "b_u585i_iot02a.h"
 #include <stdio.h>
 /* USER CODE END Includes */
 
@@ -90,6 +91,30 @@ static void MX_USB_OTG_FS_PCD_Init(void);
 /* USER CODE BEGIN 0 */
 /* Application entry: telemetry + on-demand tests (Core/Src/app_main.cpp) */
 extern void App_Main(void);
+
+#define NS_FLASH_END_ADDR       0x08200000UL
+#define NS_RAM_START_ADDR       0x20040000UL
+#define NS_RAM_END_ADDR         0x200C0000UL
+#define NS_APPINFO_ADDR         0x08100400UL
+#define NS_APPINFO_MAGIC        0x4E534150UL /* "NSAP" */
+
+static int NonSecure_ImageIsValid(void)
+{
+  const uint32_t initialSp = *(const uint32_t *)VTOR_TABLE_NS_START_ADDR;
+  const uint32_t resetHandler = *(const uint32_t *)(VTOR_TABLE_NS_START_ADDR + 4U);
+  const uint32_t magic = *(const uint32_t *)NS_APPINFO_ADDR;
+  const uint32_t version = *(const uint32_t *)(NS_APPINFO_ADDR + 4U);
+
+  const int stackValid = initialSp >= NS_RAM_START_ADDR &&
+                         initialSp <= NS_RAM_END_ADDR &&
+                         (initialSp & 0x7U) == 0U;
+  const int resetValid = (resetHandler & 1U) != 0U &&
+                         (resetHandler & ~1U) >= VTOR_TABLE_NS_START_ADDR &&
+                         (resetHandler & ~1U) < NS_FLASH_END_ADDR;
+  const int appInfoValid = magic == NS_APPINFO_MAGIC &&
+                           version != 0U && version != 0xFFFFFFFFU;
+  return stackValid && resetValid && appInfoValid;
+}
 /* USER CODE END 0 */
 
 /**
@@ -128,6 +153,18 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+
+  /* Secure Stage-0 boot decision:
+   * - valid Bank2 image + button released: launch the NonSecure application
+   * - button held, or invalid/missing image: remain in the Wi-Fi OTA loader
+   * The button is sampled before the slower sensor/radio initialization. */
+  (void)BSP_PB_Init(BUTTON_USER, BUTTON_MODE_GPIO);
+  HAL_Delay(20U);
+  if (NonSecure_ImageIsValid() && BSP_PB_GetState(BUTTON_USER) == 0)
+  {
+    Secure_JumpToNonSecure();
+  }
+
   MX_ADF1_Init();
   MX_I2C1_Init();
   MX_I2C2_Init();
