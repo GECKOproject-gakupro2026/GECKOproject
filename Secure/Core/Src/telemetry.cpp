@@ -83,6 +83,21 @@ uint32_t adcReadChannel(uint32_t channel)
 constexpr size_t kAudioSamples = 2048;   /* circular capture buffer */
 
 int16_t audioBuf[kAudioSamples];
+
+} // namespace (reopened below)
+} // namespace telemetry
+
+/* Live microphone window for the AI inference path (C linkage) */
+extern "C" const int16_t *Telemetry_GetAudioBuffer(uint32_t *count)
+{
+  *count = telemetry::kAudioSamples;
+  return telemetry::audioBuf;
+}
+
+namespace telemetry
+{
+namespace
+{
 uint8_t audioFrame[1024 + FRAME_OVERHEAD]; /* PCM streaming TX buffer */
 
 /* --- Non-blocking VCP transmit (interrupt driven, single in-flight buffer).

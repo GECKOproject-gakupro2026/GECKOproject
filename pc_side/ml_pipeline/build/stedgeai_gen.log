@@ -1,0 +1,53 @@
+WARNING: --allocate-inputs is deprecated, as it is the default behavior now. Please use the option --no-inputs-allocation to allocate input buffers in the application
+WARNING: --allocate-outputs is deprecated, as it is the default behavior now. Please use the option --no-outputs-allocation to allocate output buffers in the application
+ST Edge AI Core v2.2.0-20266 2adc00962
+PASS:   0%|          | 0/167 [00:00<?, ?it/s]PASS:   6%|5         | 10/167 [06:59<1:49:50, 41.98s/it]PASS:   7%|6         | 11/167 [07:01<1:35:59, 36.92s/it]PASS:  11%|#1        | 19/167 [07:01<37:31, 15.21s/it]  PASS:  15%|#4        | 25/167 [07:01<22:05,  9.34s/it]PASS:  22%|##2       | 37/167 [07:01<09:37,  4.44s/it]PASS:  40%|###9      | 66/167 [07:01<02:39,  1.58s/it]PASS:  58%|#####8    | 97/167 [07:01<00:55,  1.25it/s]PASS:  69%|######8   | 115/167 [07:01<00:29,  1.76it/s]PASS:  79%|#######9  | 132/167 [07:02<00:14,  2.43it/s]PASS:  87%|########7 | 146/167 [07:02<00:06,  3.16it/s]                                                       
+Creating c (debug) info json file D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai\audio_net_c_info.json
+PASS:  87%|########7 | 146/167 [07:03<00:06,  3.16it/s]PASS:  94%|#########4| 157/167 [07:03<00:02,  3.72it/s]                                                        
+ Exec/report summary (generate)
+ -------------------------------------------------------------------------------------------------------------------
+ model file         :   D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\model.tflite   
+ type               :   tflite                                                                                      
+ c_name             :   audio_net                                                                                   
+ compression        :   lossless                                                                                    
+ options            :   allocate-inputs, allocate-outputs                                                           
+ optimization       :   balanced                                                                                    
+ target/series      :   stm32u5                                                                                     
+ workspace dir      :   D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\st_ai_ws             
+ output dir         :   D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai        
+ model_fmt          :   float                                                                                       
+ model_name         :   model                                                                                       
+ model_hash         :   0x0749ea096dfb04ebb065e4858a427872                                                          
+ params #           :   4,219 items (16.48 KiB)                                                                     
+ -------------------------------------------------------------------------------------------------------------------
+ input 1/1          :   'serving_default_pcm0', f32(1x2048x1), 8.00 KBytes, activations                             
+ output 1/1         :   'nl_12', f32(1x3), 12 Bytes, activations                                                    
+ macc               :   254,864                                                                                     
+ weights (ro)       :   16,876 B (16.48 KiB) (1 segment)                                                            
+ activations (rw)   :   16,416 B (16.03 KiB) (1 segment) *                                                          
+ ram (total)        :   16,416 B (16.03 KiB) = 16,416 + 0 + 0                                                       
+ -------------------------------------------------------------------------------------------------------------------
+ (*) 'input'/'output' buffers are allocated in the activations buffer
+PASS:  94%|#########4| 157/167 [07:03<00:02,  3.72it/s]                                                       
+Computing AI RT data/code size (target=stm32u5)..
+PASS:  94%|#########4| 157/167 [07:03<00:02,  3.72it/s]                                                        -> compiler "gcc:arm-none-eabi-gcc" is not in the PATH
+PASS:  94%|#########4| 157/167 [07:03<00:02,  3.72it/s]PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                       
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                        Generated files (7)
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                        --------------------------------------------------------------------------------------------------------------
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                        D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai\audio_net_data_params.h
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                        D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai\audio_net_data_params.c
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                        D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai\audio_net_data.h
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                        D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai\audio_net_data.c
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                        D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai\audio_net_config.h
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                        D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai\audio_net.h
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                        D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai\audio_net.c
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]                                                       
+Creating txt report file D:\App\STM32CubeIDE\workspace_2.1.1\B-U585I-IOT02A\pc_side\ml_pipeline\build\stm32ai\audio_net_generate_report.txt
+PASS:  99%|#########8| 165/167 [07:04<00:00,  4.36it/s]Do you allow statistics to improve the command line? (y)es / (n)o
+Exception in thread Thread-2:
+Traceback (most recent call last):
+  File "threading.py", line 980, in _bootstrap_inner
+  File "threading.py", line 917, in run
+  File "build\\utilities\\stats.py", line 89, in ild.utilities.stats._ask_user_tracking.get_input
+EOFError: EOF when reading a line
+PASS:  99%|#########8| 165/167 [07:20<00:00,  4.36it/s]PASS: 100%|##########| 167/167 [07:23<00:00,  1.23it/s]                                                       elapsed time (generate): 445.231s

@@ -6,6 +6,7 @@
   *          Console keys: 't' = run the full test suite once, then resume.
   ******************************************************************************
   */
+#include "ai_app.hpp"
 #include "app_config.h"
 #include "console.h"
 #include "main.h"
@@ -73,7 +74,7 @@ extern "C" void App_Main(void)
   printf("\r\n\r\n===== B-U585I-IOT02A status telemetry firmware =====\r\n");
   printf("SYSCLK=%lu Hz, build " __DATE__ " " __TIME__ "\r\n",
          HAL_RCC_GetSysClockFreq());
-  printf("console keys: 't' = run test suite, 'a' = audio stream ON, 's' = OFF\r\n");
+  printf("console keys: 't'=tests  'a'/'s'=audio stream  'i'=infer once  'I'=auto infer\r\n");
 
   /* Run indicator: LD6/LD7 blink alternately while the firmware is running */
   BSP_LED_Init(LED_RED);
@@ -85,9 +86,31 @@ extern "C" void App_Main(void)
   static telemetry::Service service;
   service.init();
 
+  auto inferAndPrint = []() {
+    aiapp::Result r;
+    if (!aiapp::runOnce(r))
+    {
+      return;
+    }
+    printf("[AI] %s", aiapp::label(r.topClass));
+    for (uint8_t i = 0; i < r.nClasses; i++)
+    {
+      printf("  %s=%d%%", aiapp::label(i), (int)(r.scores[i] * 100.0f + 0.5f));
+    }
+    printf("  (%lums)\r\n", r.inferenceUs / 1000U);
+  };
+  bool autoInfer = false;
+  uint32_t nextInferTick = 0;
+
   for (;;)
   {
     service.poll();
+
+    if (autoInfer && static_cast<int32_t>(HAL_GetTick() - nextInferTick) >= 0)
+    {
+      nextInferTick = HAL_GetTick() + 2000U;
+      inferAndPrint();
+    }
 
     int key = Console_GetChar(0);
     if (key >= 0)
@@ -114,6 +137,15 @@ extern "C" void App_Main(void)
     else if (key == 'b' || key == 'B')
     {
       bleBridge();
+    }
+    else if (key == 'i')
+    {
+      inferAndPrint();
+    }
+    else if (key == 'I')
+    {
+      autoInfer = !autoInfer;
+      printf("[AI] auto inference %s\r\n", autoInfer ? "ON (2s)" : "OFF");
     }
   }
 }

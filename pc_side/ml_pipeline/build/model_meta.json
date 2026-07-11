@@ -1,0 +1,9 @@
+{
+  "window": 2048,
+  "sample_rate": 16000,
+  "classes": [
+    "silence",
+    "tone",
+    "noise"
+  ]
+}
