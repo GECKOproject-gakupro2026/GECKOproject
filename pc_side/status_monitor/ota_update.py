@@ -42,6 +42,7 @@ class Link:
             self._ser = serial.Serial(port, 921600, timeout=0.05)
             self._sock = None
             self.name = f"UART {port}"
+            self._drain_startup_backlog()
         elif tcp:
             import socket
             host, _, p = tcp.partition(":")
@@ -52,6 +53,21 @@ class Link:
         else:
             raise SystemExit("--port か --tcp のどちらかを指定してください")
 
+    def _drain_startup_backlog(self) -> None:
+        """Windows' USB-CDC host buffering can hold telemetry bytes that
+        reset_input_buffer() alone doesn't flush in one call - keep reading
+        until the link has been quiet for a short stretch before sending
+        the first OTA frame, or an early ACK gets lost in the backlog."""
+        self._ser.reset_input_buffer()
+        quiet_for = 0.0
+        deadline = time.time() + 1.5
+        drained = 0
+        while time.time() < deadline and quiet_for < 0.3:
+            d = self._ser.read(4096)
+            drained += len(d)
+            quiet_for = quiet_for + 0.05 if not d else 0.0
+        print(f"  [drain] flushed {drained} startup backlog bytes")
+
     def write(self, data: bytes) -> None:
         if self._ser:
             self._ser.write(data)
@@ -61,8 +77,13 @@ class Link:
     def read(self) -> bytes:
         try:
             if self._ser:
-                return self._ser.read(4096)
-            return self._sock.recv(4096)
+                # Drain everything currently queued, not just one 4 KB
+                # chunk: at 50 Hz telemetry (~8 KB/s) a single OTA ACK-wait
+                # loop iteration can otherwise fall behind the link and
+                # never catch up to the ACK sitting behind the backlog.
+                n = self._ser.in_waiting
+                return self._ser.read(max(n, 1))
+            return self._sock.recv(65536)
         except TimeoutError:
             return b""
         except Exception:  # noqa: BLE001 - socket.timeout etc.

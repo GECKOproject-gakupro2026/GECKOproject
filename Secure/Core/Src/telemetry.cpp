@@ -1238,6 +1238,8 @@ extern "C" void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     telemetry::bleLinkOk = true;
     (void)stm32wb_at_Received(telemetry::bleRxByte);
   }
+  /* USART1 RX is DMA-driven (console.cpp); Console_GetChar() polls the
+   * circular buffer directly, no callback needed. */
 }
 
 /* ---- EMW3080 handshake interrupts (FLOW=PG15, NOTIFY=PD14) ---------------- */
