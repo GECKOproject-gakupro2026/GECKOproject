@@ -59,6 +59,14 @@ SECTIONS
     KEEP(*(.isr_vector)) /* Startup code */
   } >FLASH
 
+  /* OTA version banner at a fixed offset (base + 0x400) so the Secure loader
+   * can read the staged/running NonSecure version without executing it. The
+   * vector table is well under 0x200 bytes, so this never overlaps it. */
+  .ns_appinfo 0x08100400 :
+  {
+    KEEP(*(.ns_appinfo))
+  } >FLASH
+
   /* The program code and other data into "FLASH" Rom type memory */
   .text :
   {

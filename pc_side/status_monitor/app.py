@@ -265,8 +265,8 @@ class StatusMonitorApp:
             self.target_entry.configure(values=["P2PSRV1", "STM32WB"])
             self.target_var.set("P2PSRV1")
         else:
-            self.target_entry.configure(values=["192.168.11.48:5000"])
-            self.target_var.set("192.168.11.48:5000")
+            self.target_entry.configure(values=["192.168.137.2:5000"])
+            self.target_var.set("192.168.137.2:5000")
 
     # ---------------- connection ----------------
     def _toggle_connect(self) -> None:

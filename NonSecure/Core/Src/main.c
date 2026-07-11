@@ -31,7 +31,26 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+/* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
+ * the air to see the LED pattern change - the running version is proven by
+ * how the LEDs blink (see the app loop below). */
+#define NS_APP_VERSION   2U
 
+/* User LEDs on this board: LD6 red = PH6, LD7 green = PH7 */
+#define LED_RED_PIN      GPIO_PIN_6
+#define LED_GREEN_PIN    GPIO_PIN_7
+#define LED_PORT         GPIOH
+
+/* Version banner placed at a fixed offset so the Secure loader (and a host
+ * tool) can read the staged/running NonSecure version without executing it.
+ * Lives after the vector table area, in a dedicated .ns_appinfo
+ * section pinned by the linker. */
+typedef struct
+{
+  uint32_t magic;    /* 0x4E534150 = "NSAP" */
+  uint32_t version;
+  uint32_t reserved[2];
+} ns_appinfo_t;
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -53,7 +72,33 @@ static void MX_GTZC_NS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+/* Version banner - pinned by the linker at the start of NS flash + 0x400 */
+__attribute__((section(".ns_appinfo"), used))
+const ns_appinfo_t g_ns_appinfo = {0x4E534150U, NS_APP_VERSION, {0U, 0U}};
 
+/* Mirror the version into a fixed SRAM3 (non-secure RAM) word so the Secure
+ * side can display which NonSecure version is actually running. */
+#define NS_RUNNING_VERSION_ADDR  0x200BFFF0UL /* top of NS SRAM3 */
+
+static void led_init(void)
+{
+  GPIO_InitTypeDef gpio = {0};
+  __HAL_RCC_GPIOH_CLK_ENABLE();
+  gpio.Pin = LED_RED_PIN | LED_GREEN_PIN;
+  gpio.Mode = GPIO_MODE_OUTPUT_PP;
+  gpio.Pull = GPIO_NOPULL;
+  gpio.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(LED_PORT, &gpio);
+}
+
+/* OTA demonstration image: LD6/red remains off while LD7/green stays on. */
+static void led_show_version(uint32_t version)
+{
+  HAL_GPIO_WritePin(LED_PORT, LED_RED_PIN, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED_PORT, LED_GREEN_PIN, GPIO_PIN_SET);
+  (void)version;
+  HAL_Delay(1000);
+}
 /* USER CODE END 0 */
 
 /**
@@ -85,7 +130,9 @@ int main(void)
 
   /* Initialize all configured peripherals */
   /* USER CODE BEGIN 2 */
-
+  led_init();
+  /* Publish the running version for the Secure side / host tools */
+  *(volatile uint32_t *)NS_RUNNING_VERSION_ADDR = g_ns_appinfo.version;
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -95,6 +142,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    led_show_version(g_ns_appinfo.version);
   }
   /* USER CODE END 3 */
 }

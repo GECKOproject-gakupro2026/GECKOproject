@@ -49,12 +49,14 @@ public:
    * Reads the staged image back and verifies the CRC.
    * Returns 0 on success or a FRAME_ERR_* code. */
   uint8_t complete(const uint8_t *payload, uint16_t len);
+  uint8_t applyToNonSecure();
 
   void fillReport(StatusReport &r) const;
   void reset();
 
 private:
   bool ensureNorReady();
+  bool validateNonSecureImage();
   uint8_t ensureErased(uint32_t endOffset);
 
   State state_ = State::Idle;

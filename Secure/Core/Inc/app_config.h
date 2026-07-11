@@ -51,20 +51,13 @@
 /* ---- Wi-Fi module -------------------------------------------------------- */
 #define CFG_WIFI_BOOT_TIMEOUT_MS 5000U
 
-/* Operating mode: 1 = SoftAP (the board emits its own Wi-Fi network and the
- * PC connects to it - no router needed), 0 = STA (join an existing AP) */
-#define CFG_WIFI_MODE_SOFTAP     1
+/* The board operates as a station and joins the PC's Windows mobile hotspot.
+ * Keep the hotspot on 2.4 GHz: the EMW3080 does not support 5 GHz. */
+#define CFG_WIFI_MODE_SOFTAP     0
 
-/* SoftAP settings (mode 1): connect your PC to this network, then open
- * the status monitor with Wi-Fi (TCP) target 192.168.4.1:5000 */
-#define CFG_WIFI_AP_SSID         "U585-IOT02A"
-#define CFG_WIFI_AP_PASSWORD     "u585iot02a"  /* WPA2, 8+ chars */
-#define CFG_WIFI_AP_CHANNEL      6
-#define CFG_WIFI_AP_IP           "192.168.4.1"
-
-/* STA credentials (mode 0): the board joins this access point instead */
-#define CFG_WIFI_SSID            "Buffalo-Wifi-2.4G"
-#define CFG_WIFI_PASSWORD        "kubokihome"
+/* Windows mobile hotspot credentials (see pc_side/wifi_hotspot.ps1). */
+#define CFG_WIFI_SSID            "U585-IOT02A"
+#define CFG_WIFI_PASSWORD        "u585iot02a"
 
 #define CFG_WIFI_TCP_PORT        5000U
 

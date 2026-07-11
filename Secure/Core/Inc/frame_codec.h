@@ -34,6 +34,7 @@ extern "C" {
 #define FRAME_CMD_FW_COMPLETE  0x05U   /* PC->board: size u32 + crc16 u16    */
 #define FRAME_CMD_STATUS_REQ   0x06U   /* PC->board: query OTA state         */
 #define FRAME_CMD_STATUS_RESP  0x07U   /* board->PC: OTA state report        */
+#define FRAME_CMD_FW_APPLY     0x08U   /* copy staged NS image to Bank2/run */
 #define FRAME_CMD_ACK          0x7EU   /* {orig_cmd, orig_seq, u32 arg}      */
 #define FRAME_CMD_NACK         0x7FU   /* {orig_cmd, orig_seq, u8 error}     */
 

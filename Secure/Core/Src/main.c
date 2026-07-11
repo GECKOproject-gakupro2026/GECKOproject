@@ -66,7 +66,7 @@ PCD_HandleTypeDef hpcd_USB_OTG_FS;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
-static void NonSecure_Init(void);
+void Secure_JumpToNonSecure(void);
 void SystemClock_Config(void);
 static void SystemPower_Config(void);
 static void MX_GPIO_Init(void);
@@ -145,7 +145,7 @@ int main(void)
 
   /*************** Setup and jump to non-secure *******************************/
 
-  NonSecure_Init();
+  Secure_JumpToNonSecure();
 
   /* Non-secure software does not return, this code is not executed */
 
@@ -166,9 +166,17 @@ int main(void)
   *         to non-secure state
   * @retval None
   */
-static void NonSecure_Init(void)
+void Secure_JumpToNonSecure(void)
 {
   funcptr_NS NonSecure_ResetHandler;
+
+  __disable_irq();
+  SysTick->CTRL = 0U;
+  for (uint32_t i = 0; i < 16U; i++)
+  {
+    NVIC->ICER[i] = 0xFFFFFFFFU;
+    NVIC->ICPR[i] = 0xFFFFFFFFU;
+  }
 
   SCB_NS->VTOR = VTOR_TABLE_NS_START_ADDR;
 
@@ -179,6 +187,7 @@ static void NonSecure_Init(void)
   NonSecure_ResetHandler = (funcptr_NS)(*((uint32_t *)((VTOR_TABLE_NS_START_ADDR) + 4U)));
 
   /* Start non-secure state software application */
+  __enable_irq();
   NonSecure_ResetHandler();
 }
 

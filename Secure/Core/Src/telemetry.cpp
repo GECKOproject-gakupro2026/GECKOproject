@@ -33,6 +33,7 @@
 extern UART_HandleTypeDef huart1; /* VCP console / telemetry stream */
 extern UART_HandleTypeDef huart4; /* STM32WB5MMG BLE module (AT server) */
 extern "C" SPI_HandleTypeDef hspi2; /* EMW3080 Wi-Fi module */
+extern "C" void Secure_JumpToNonSecure(void);
 
 /* CubeMX-generated ADF1 handle (main.c), released before the BSP takes over */
 extern "C" MDF_HandleTypeDef AdfHandle0;
@@ -250,36 +251,9 @@ bool wifiModuleInit()
          obj->SysInfo.MAC[5]);
 
 #if CFG_WIFI_MODE_SOFTAP
-  /* SoftAP mode: the board runs its own network + DHCP server; the PC joins
-   * this network and reaches the telemetry TCP server at CFG_WIFI_AP_IP */
-  {
-    (void)MX_WIFI_RegisterStatusCallback(obj, wifiStatusCb, nullptr);
+#error "Board SoftAP mode was retired; use the Windows 2.4 GHz hotspot and STA mode"
+#endif
 
-    MX_WIFI_APSettings_t ap = {};
-    strncpy(ap.SSID, CFG_WIFI_AP_SSID, sizeof(ap.SSID) - 1U);
-    strncpy(ap.pswd, CFG_WIFI_AP_PASSWORD, sizeof(ap.pswd) - 1U);
-    ap.channel = CFG_WIFI_AP_CHANNEL;
-    strncpy(ap.ip.localip, CFG_WIFI_AP_IP, sizeof(ap.ip.localip) - 1U);
-    strncpy(ap.ip.netmask, "255.255.255.0", sizeof(ap.ip.netmask) - 1U);
-    strncpy(ap.ip.gateway, CFG_WIFI_AP_IP, sizeof(ap.ip.gateway) - 1U);
-    strncpy(ap.ip.dnserver, CFG_WIFI_AP_IP, sizeof(ap.ip.dnserver) - 1U);
-
-    int32_t apRet = MX_WIFI_StartAP(obj, &ap);
-    wifiNetUp = (apRet == MX_WIFI_STATUS_OK);
-    if (wifiNetUp)
-    {
-      printf("[TLM] SoftAP up: SSID=\"%s\" pass=\"%s\" ch=%d ip=%s\r\n",
-             CFG_WIFI_AP_SSID, CFG_WIFI_AP_PASSWORD, CFG_WIFI_AP_CHANNEL,
-             CFG_WIFI_AP_IP);
-      printf("[TLM] connect your PC to this Wi-Fi, then TCP %s:%u\r\n",
-             CFG_WIFI_AP_IP, CFG_WIFI_TCP_PORT);
-    }
-    else
-    {
-      printf("[TLM] SoftAP start failed (%ld)\r\n", (long)apRet);
-    }
-  }
-#else /* STA mode */
   if (CFG_WIFI_SSID[0] != '\0')
   {
     (void)MX_WIFI_RegisterStatusCallback(obj, wifiStatusCb, nullptr);
@@ -332,7 +306,6 @@ bool wifiModuleInit()
   {
     printf("[TLM] CFG_WIFI_SSID empty - module verified, not joining an AP\r\n");
   }
-#endif /* CFG_WIFI_MODE_SOFTAP */
   return true;
 }
 
@@ -1052,6 +1025,25 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
       otaMgr.fillReport(rep);
       sendResponse(fromTcp, FRAME_CMD_STATUS_RESP,
                    reinterpret_cast<const uint8_t *>(&rep), sizeof(rep));
+      break;
+    }
+    case FRAME_CMD_FW_APPLY:
+    {
+      uint8_t err = otaMgr.applyToNonSecure();
+      if (err != 0U)
+      {
+        NackPayload nack = {cmd, seq, err};
+        sendResponse(fromTcp, FRAME_CMD_NACK,
+                     reinterpret_cast<const uint8_t *>(&nack), sizeof(nack));
+        break;
+      }
+      AckPayload ack = {cmd, seq, 0U};
+      sendResponse(fromTcp, FRAME_CMD_ACK,
+                   reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
+      HAL_Delay(300U);
+      printf("[OTA] launching NonSecure application at 0x08100000\r\n");
+      HAL_Delay(50U);
+      Secure_JumpToNonSecure();
       break;
     }
     default:

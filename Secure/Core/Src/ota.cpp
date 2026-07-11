@@ -19,6 +19,10 @@ namespace ota
 
 namespace
 {
+constexpr uint32_t kNsFlashBase = 0x08100000U;
+constexpr uint32_t kNsFlashSize = 0x00100000U;
+constexpr uint32_t kFlashPageSize = 0x2000U;
+
 /* Incremental CRC-16/CCITT-FALSE (Frame_Crc16 == crc16Update(0xFFFF, ...)) */
 uint16_t crc16Update(uint16_t crc, const uint8_t *data, size_t len)
 {
@@ -33,6 +37,83 @@ uint16_t crc16Update(uint16_t crc, const uint8_t *data, size_t len)
   return crc;
 }
 } // namespace
+
+bool Manager::validateNonSecureImage()
+{
+  if (state_ != State::Staged || expected_ < 8U || expected_ > kNsFlashSize)
+  {
+    return false;
+  }
+  uint32_t vectors[2] = {};
+  if (BSP_OSPI_NOR_Read(0, reinterpret_cast<uint8_t *>(vectors),
+                        kStagingBase, sizeof(vectors)) != BSP_ERROR_NONE)
+  {
+    return false;
+  }
+  const bool stackOk = vectors[0] >= 0x20040000U && vectors[0] <= 0x200C0000U;
+  const bool resetOk = (vectors[1] & 1U) != 0U &&
+                       (vectors[1] & ~1U) >= kNsFlashBase &&
+                       (vectors[1] & ~1U) < (kNsFlashBase + expected_);
+  return stackOk && resetOk;
+}
+
+uint8_t Manager::applyToNonSecure()
+{
+  if (!ensureNorReady() || !validateNonSecureImage())
+  {
+    lastError_ = FRAME_ERR_BAD_STATE;
+    return lastError_;
+  }
+
+  printf("[OTA] applying %lu-byte NonSecure image to Bank2...\r\n",
+         (unsigned long)expected_);
+  HAL_FLASH_Unlock();
+  FLASH_EraseInitTypeDef erase = {};
+  erase.TypeErase = FLASH_TYPEERASE_PAGES_NS;
+  erase.Banks = FLASH_BANK_2;
+  erase.Page = 0U;
+  erase.NbPages = (expected_ + kFlashPageSize - 1U) / kFlashPageSize;
+  uint32_t pageError = 0xFFFFFFFFU;
+  if (HAL_FLASHEx_Erase(&erase, &pageError) != HAL_OK)
+  {
+    HAL_FLASH_Lock();
+    printf("[OTA] Bank2 erase failed at page %lu, HAL=0x%08lX\r\n",
+           (unsigned long)pageError, (unsigned long)HAL_FLASH_GetError());
+    lastError_ = FRAME_ERR_ERASE;
+    return lastError_;
+  }
+
+  alignas(16) uint8_t quad[16];
+  for (uint32_t off = 0; off < expected_; off += sizeof(quad))
+  {
+    memset(quad, 0xFF, sizeof(quad));
+    const uint32_t n = (expected_ - off) < sizeof(quad)
+                           ? (expected_ - off) : sizeof(quad);
+    if (BSP_OSPI_NOR_Read(0, quad, kStagingBase + off, n) != BSP_ERROR_NONE ||
+        HAL_FLASH_Program(FLASH_TYPEPROGRAM_QUADWORD_NS, kNsFlashBase + off,
+                          reinterpret_cast<uint32_t>(quad)) != HAL_OK)
+    {
+      HAL_FLASH_Lock();
+      printf("[OTA] Bank2 program failed at +0x%08lX, HAL=0x%08lX\r\n",
+             (unsigned long)off, (unsigned long)HAL_FLASH_GetError());
+      lastError_ = FRAME_ERR_WRITE;
+      return lastError_;
+    }
+  }
+  HAL_FLASH_Lock();
+
+  const uint16_t crc = crc16Update(0xFFFFU,
+      reinterpret_cast<const uint8_t *>(kNsFlashBase), expected_);
+  if (crc != imageCrc_)
+  {
+    printf("[OTA] Bank2 verify failed: 0x%04X != 0x%04X\r\n", crc, imageCrc_);
+    lastError_ = FRAME_ERR_VERIFY;
+    return lastError_;
+  }
+  printf("[OTA] Bank2 apply verified, crc=0x%04X\r\n", crc);
+  lastError_ = 0U;
+  return 0U;
+}
 
 bool Manager::ensureNorReady()
 {

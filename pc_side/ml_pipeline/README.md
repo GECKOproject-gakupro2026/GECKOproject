@@ -18,7 +18,7 @@ python pipeline.py --steps train,generate,integrate,build
 
 # 書き込みをOTA(通信)経由にする（UARTまたはWi-Fi）
 python pipeline.py --ota COM9
-python pipeline.py --ota 192.168.4.1:5000
+python pipeline.py --ota 192.168.137.2:5000  # use the board's DHCP address
 ```
 
 ## 各ステップ

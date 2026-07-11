@@ -8,7 +8,7 @@ handled by the (future) bootloader step.
 
 Usage:
   python ota_update.py firmware.bin --port COM9
-  python ota_update.py firmware.bin --tcp 192.168.4.1:5000
+  python ota_update.py firmware.bin --tcp 192.168.137.2:5000
   python ota_update.py --status --port COM9      (query staging state)
 
 Notes:
@@ -30,6 +30,7 @@ import protocol  # noqa: E402
 CHUNK_DATA = 1008          # payload = 4B offset + data -> 1012 <= 1024
 ACK_TIMEOUT = 1.5          # covers a 64KB erase before the write
 COMPLETE_TIMEOUT = 30.0    # full read-back CRC verify on the board
+APPLY_TIMEOUT = 60.0       # Bank2 erase/program/read-back verify
 RETRIES = 3                # 11.2: resend limit
 
 
@@ -145,8 +146,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="B-U585I OTA firmware upload")
     ap.add_argument("image", nargs="?", help="firmware .bin to stage")
     ap.add_argument("--port", help="serial port (e.g. COM9)")
-    ap.add_argument("--tcp", help="host:port (e.g. 192.168.4.1:5000)")
+    ap.add_argument("--tcp", help="host:port (e.g. 192.168.137.2:5000; use the board's DHCP address)")
     ap.add_argument("--status", action="store_true", help="query staging state only")
+    ap.add_argument("--apply", action="store_true",
+                    help="write the staged NonSecure image to Bank2 and run it")
     args = ap.parse_args()
 
     link = Link(args.port, args.tcp)
@@ -184,6 +187,11 @@ def main() -> None:
     print(f"OK: image staged and CRC-verified in {dt:.1f}s "
           f"({total / dt / 1024:.1f} KB/s)")
     query_status(link, parser)
+    if args.apply:
+        print("applying staged image to Bank2...")
+        send_with_retry(link, parser, protocol.CMD_FW_APPLY, (seq + 1) & 0xFF,
+                        b"", APPLY_TIMEOUT)
+        print("OK: Bank2 programmed and verified; NonSecure application launched")
 
 
 if __name__ == "__main__":
