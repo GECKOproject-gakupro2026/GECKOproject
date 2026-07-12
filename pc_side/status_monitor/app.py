@@ -52,6 +52,7 @@ class StatusMonitorApp:
         self.last_status: protocol.Status | None = None
 
         self.audio_view: list[int] = []
+        self.streaming = False
         self.recording = False
         self.record_samples: list[int] = []
         self.last_wav: pathlib.Path | None = None
@@ -335,7 +336,7 @@ class StatusMonitorApp:
             self._toggle_record()
 
     def _toggle_stream(self) -> None:
-        self._set_stream(not getattr(self, "streaming", False))
+        self._set_stream(not self.streaming)
 
     def _toggle_record(self) -> None:
         if not self.recording:

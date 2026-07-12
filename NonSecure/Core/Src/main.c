@@ -39,7 +39,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   15U
+#define NS_APP_VERSION   16U
 
 /* User LEDs on this board: LD6 red = PH6, LD7 green = PH7 */
 #define LED_RED_PIN      GPIO_PIN_6

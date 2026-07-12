@@ -28,7 +28,9 @@ static uint32_t s_nextEnvTick, s_nextLightTick, s_nextTofTick;
 #define SENSORS_LIGHT_PERIOD_MS  200U
 #define SENSORS_TOF_PERIOD_MS    500U
 
-void Sensors_Init(void)
+/* Common VL53L5CX bring-up: BSP init + profile config + start ranging.
+ * Used both at boot and after Sensors_Resume() re-powers the sensor via LPn. */
+static void tofInitAndStart(void)
 {
   s_tofOk = 0U;
   if (BSP_RANGING_SENSOR_Init(0) == BSP_ERROR_NONE)
@@ -45,6 +47,11 @@ void Sensors_Init(void)
       s_tofOk = 1U;
     }
   }
+}
+
+void Sensors_Init(void)
+{
+  tofInitAndStart();
   if (!s_tofOk)
   {
     printf("[SENS] ToF init failed\r\n");
@@ -88,19 +95,29 @@ void Sensors_Init(void)
 
 void Sensors_Stop(void)
 {
-  /* Low-power mode (Phase E): stop the ToF ranging loop - it's the one
-   * sensor with an active async measurement cycle running in hardware. */
+  /* Low-power mode (Phase E/F): BSP_RANGING_SENSOR_Stop() only issues an I2C
+   * stop-ranging command - the VL53L5CX module itself (and its activity LED)
+   * stays powered. Drive LPn (PH1) low to put the sensor in hardware
+   * shutdown, which actually cuts its power draw and the LED. */
   if (s_tofOk)
   {
     (void)BSP_RANGING_SENSOR_Stop(0);
   }
+  HAL_GPIO_WritePin(VL53L5A1_LP_PORT, VL53L5A1_LP_PIN, GPIO_PIN_RESET);
 }
 
 void Sensors_Resume(void)
 {
-  if (s_tofOk)
+  /* LPn low->high is a hardware reset (XSHUT release): the sensor reboots
+   * and needs a full re-init, not just Start(). Re-run BSP_RANGING_SENSOR_Init
+   * + the same profile/start sequence as Sensors_Init(). */
+  HAL_GPIO_WritePin(VL53L5A1_LP_PORT, VL53L5A1_LP_PIN, GPIO_PIN_SET);
+  HAL_Delay(2); /* VL53L5CX boot time after LPn release (datasheet: <=1.2 ms) */
+
+  tofInitAndStart();
+  if (!s_tofOk)
   {
-    (void)BSP_RANGING_SENSOR_Start(0, RS_MODE_ASYNC_CONTINUOUS);
+    printf("[SENS] ToF re-init after resume failed\r\n");
   }
 }
 

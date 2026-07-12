@@ -285,3 +285,64 @@ NonSecure `App_Main` ループ（現 main.c:145-151 のLEDデモを置換）:
 
 - **ウェイク検知は純ポーリング**: Secure通信スタックはIDLE中もリスナー稼働(UART RX DMA/pollTcp/UART4はNonSecureモードに非依存)。バイト着信でSecure受信リング/nsActivityフラグが立ち、NonSecureの次の`Comm_PollHostCommand`が非ゼロを返す。割り込みをNonSecureへ入れる必要なし
 - **PC側keep-aliveの`\x00`**: フレームSOF(0xAA)ではないので`FRAME_FEED_PLAIN`扱い→活動フラグは立つがコマンドとしては無害。nsCmdRingは16バイト循環で溢れても安全
+
+Phase F（回帰確認）で既存バグを発見しました。 OTAの実ファーム更新（139KBのv15をUART経由で適用）で、ステージング（NOR書き込み+CRC検証）は成功するものの、FW_APPLY（NOR→Bank2コピー）後の検証でNACK(VERIFY)エラーになりBank2が消去状態のまま書き込まれませんでした。ボードはSWD直接書き込みで復旧済みです（v15正常動作、50Hzテレメトリ確認）。
+
+このバグはTrustZoneリファクタリングとは無関係です。ota.cppのapplyToNonSecureは今回一切変更しておらず、Phase 2で動作確認したのは4〜5KBの小さいイメージでした。今回139KB（AI推論コードを含むため約30倍）で初めて露呈した、大きいイメージのBank2適用が失敗する既存バグです。原因候補はICACHE不整合、OCTOSPIメモリマップとNOR読み戻しの干渉、書き込みループの問題などです。
+
+---
+
+## バグ修正フェーズ（2026-07-13）：ユーザー報告の7項目対応
+
+ユーザーから以下の課題が報告され、順に対応した：
+(1)PhaseFの書き込みバグ (2)appでのストリーミング/録音不可 (3)低消費モードでもToFのLED起動 (4)プログラム内容と保存場所・メモリ管理の曖昧さ (5)UARTコマンドのmarkdown明示 (6)LED状態と実行状態の対応付け (7)プログラムファイルの肥大化
+
+### (2) 音声ストリーミング/録音不可 — 修正・実機検証済み
+
+**根本原因**: TrustZoneリファクタでNS駆動モード(`nsDriven=true`)になった結果、`'a'`/`'s'`(音声ストリーム開始/停止)コマンドが完全に処理されなくなっていた。`processRxByte()`のPLAIN分岐は、NS駆動時に受信バイトを`nsCmdPush()`でキューに積むだけで、旧来の`setAudioStream()`呼び出し経路に到達しなかった。TCP側(`pollTcp`)の`'a'`/`'s'`ハンドラも、`processRxByte`が`nsDriven`時に常に-1を返すため到達不能なデッドコードだった。app.pyは接続方式を問わず`'a'`/`'s'`を送るため、UART・TCP両方でストリーミング開始が機能していなかった。
+
+**修正**: `telemetry.cpp`の`processRxByte()`のPLAIN分岐(NS駆動時)で、`nsCmdPush`の前に`'a'`/`'A'`→`setAudioStream(true)`、`'s'`/`'S'`→`setAudioStream(false)`を直接ハンドルするようにした。app.py側は`self.streaming`の初期化漏れ(getattr防御に依存)を明示初期化に修正。
+
+**実機検証**: `'a'`送信後に音声フレーム(CMD_AUDIO)が98フレーム/3秒届き、`[TLM] audio streaming ON`ログを確認。`'s'`で停止を確認。
+
+### (3) 低消費モードでもToFのLED起動 — 修正・実機検証済み
+
+**根本原因**: `Sensors_Stop()`が`BSP_RANGING_SENSOR_Stop(0)`を呼ぶだけで、これはI2Cで測距を止めるコマンドに過ぎず、VL53L5CXモジュール自体は通電されたまま(モジュール上のアクティビティLEDも消えない)。VL53L5CXのLPn(PH1)ピンはBSPの`vl53l5cx_i2c_recover()`が初期化時に一度HIGHにするだけで、以降LOWにする処理がコードのどこにも無かった。
+
+**修正**: `sensors.c`の`Sensors_Stop()`でLPn(PH1)を`GPIO_PIN_RESET`(LOW)にしてハードウェアシャットダウン。`Sensors_Resume()`でLPnをHIGHに戻し(LPn LOW→HIGHはXSHUT解除=センサー再起動なので)、`BSP_RANGING_SENSOR_Init`+プロファイル設定+Startのフル再初期化を実行(`tofInitAndStart()`ヘルパーに共通化)。
+
+**実機検証**: SWDでGPIOH IDRを読み、ACTIVE中はPH1=HIGH(`0x72`)、3秒無通信でIDLE移行後はPH1=LOW(`0xB0`/`0xF0`交互=赤LED点滅)を確認。keep-aliveでACTIVE復帰後、150フレーム全てで`tof_ok=True`(LPn解除後の再初期化成功)を確認。
+
+### (1) PhaseF書き込みバグ(OTA実ファーム更新失敗) — 原因3点を特定、2点修正・1点部分修正
+
+大きいイメージのBank2適用が失敗する問題を、実機トレースで段階的に原因を3つ特定した：
+
+**原因A: バックアップ処理が遅すぎてタイムアウト（修正済み・効果実証）**
+`backupCurrentBank2()`が現行Bank2イメージをNORスロットBへ退避する際、消去ループが`kBackupMetaOffset`(0x1F0000≒1.94MB、31ブロック)まで全域を消していた。実際に書き込むのは`kNsFlashSize`(1MB、16ブロック)分だけなので、中間15ブロックの無駄な消去でPCツールの60秒×4リトライ(最大約8分)を使い切り、FW_APPLYが一度もACKを返せなかった。**修正: 消去ループ範囲を`kBackupMetaOffset`→`kNsFlashSize`に変更**。実機で**バックアップが約5.7秒で完了**することを確認(修正前は数分でタイムアウト)。
+
+**原因B: ICACHE不整合（修正済み）**
+Bank2消去+書き込み後のCRC検証(`crc16Update`で`kNsFlashBase`をポインタ読み)が、ICACHEにキャッシュされた消去前の古いライン(0xFF等)を読んで誤ったCRCを返しVERIFY失敗しうる。**修正: `applyToNonSecure()`と`restoreFromBackup()`の書き込みループ直後、CRC検証前に`HAL_ICACHE_Invalidate()`を追加**。
+
+**原因C: Bank2消去中の割り込み起因HardFault（部分修正）**
+NonSecureアプリ実行中にOTA FW_APPLYを受けると、Bank2消去でNonSecureの割り込みベクタ/ハンドラ(`SCB_NS->VTOR`はBank2を指す)が消え、消去〜書き込み間にSecure/NonSecure割り込みが発火すると消去済み領域を実行してHardFault。小さいイメージは書き込みが速く割り込みが発火する前に完了していたため露呈しなかった。**修正: `applyToNonSecure()`の消去直前に`__disable_irq()`、書き込み完了後に`__enable_irq()`(CRC検証・ACK送信はSysTick/UART割り込みが必要なため)。FW_APPLYハンドラのジャンプ直前に`HAL_ICACHE_Invalidate()`を追加(消去したてのBank2をICACHE経由で古い内容として実行するのを防ぐ)。**
+
+**実機検証状況**:
+- ✅ **1回目のホットOTA適用(v16稼働中→再適用→ジャンプ)は成功**: バックアップ5.7秒完了、Bank2書き込み・CRC検証・ジャンプ後にICSR=正常(Thread mode)、NSAP version=16を確認。書き込み内容はSWD読み戻しとMD5完全一致で、**書き込み自体は元々完璧だった**(問題は書き込み中/ジャンプ時のフォルトとタイムアウト)。
+- ⚠️ **未解決: 連続2回目以降のホットOTA適用でジャンプ後HardFaultが残る**。v16が既に稼働している状態で立て続けにOTA→適用→ジャンプすると、2回目のジャンプ後にHardFault(ICSR VECTACTIVE=3)。アンダーリセット(`mode=UR -rst`)すれば正常起動に復帰する(Bank2イメージ自体は無傷)。通常のOTAフロー(Secureローダー状態→初回適用→初回ジャンプ)は成功するので実用上の主要ケースは動作するが、堅牢性のため**「OTA適用後は直接ジャンプせず`NVIC_SystemReset()`で再起動する」設計への変更を検討すべき**(業界標準のOTA適用パターン。どの状態からでもクリーンに起動できる)。
+
+### (6) LED状態と実行状態の対応付け（現行仕様、両LEDともSET=消灯/RESET=点灯）
+
+| 状態 | 緑LED(PH7) | 赤LED(PH6) | ToF LPn(PH1) | テレメトリ |
+|---|---|---|---|---|
+| ACTIVE | 250msでトグル(ハートビート) | 消灯 | HIGH(センサー動作) | 50Hz送信 |
+| IDLE(低消費) | 消灯 | 1秒でトグル(スロー点滅) | LOW(シャットダウン) | 停止 |
+| Secure OTAローダー | (Secure側LED制御) | - | - | Secureが送信(センサー値0) |
+
+SWDでの状態確認: GPIOH IDR = `0x42021C10`。ビット7=PH7(緑)、ビット6=PH6(赤)、ビット1=PH1(LPn)。値0=LOW。例: `0xB0`=赤点灯+LPn LOW(IDLE点灯相)、`0xF0`=両消灯+LPn LOW(IDLE消灯相)、`0x72`=ACTIVE。コアのフォルト状態はICSR=`0xE000ED04`のVECTACTIVE(下位9bit): 0=正常(Thread)、3=HardFault。
+
+### 未対応・残タスク
+
+- **(1)原因C**: 連続ホットOTAのジャンプ後HardFault。`NVIC_SystemReset()`ベースの適用完了処理への変更を検討。
+- **(4) プログラム内容と保存場所・メモリ管理の曖昧さ**: 未着手。ソース配置(Secure=通信+OTA / NonSecure=センサー+音声取得+低消費/ HAL/BSPは両側に複製)とドキュメント体系の整理が必要。
+- **(5) UARTコマンドのmarkdown明示**: コンソールキー一覧(`t`=テスト, `a`/`s`=音声ストリーム, `i`/`I`=推論, `p`/`l`=TCP専用pong/LED)とOTAフレームコマンド(CMD 0x01〜0x08)の対応表を専用ドキュメント化する。
+- **(7) プログラムファイルの肥大化**: `telemetry.cpp`が1396行(通信3系統+OTA glue+MCU情報+音声が同居)。計画通り通信部を`comm_service.cpp`へ分割するリファクタが有効。Phase F(Secureデッドコード削除)と併せて実施予定。

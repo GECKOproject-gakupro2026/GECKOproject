@@ -847,7 +847,11 @@ void Service::pollTcp()
       int plain = processRxByte(buf[i], true);
       if (plain < 0)
       {
-        continue; /* consumed by the frame layer (OTA & co.) */
+        /* consumed by the frame layer (OTA & co.), or - when nsDriven - by
+         * processRxByte()'s own 'a'/'s' handling + nsCmdPush(). This loop's
+         * 'p'/'l'/'a'/'s' below only fires in the legacy (non-NS-driven)
+         * App_Main path where processRxByte() returns the byte instead. */
+        continue;
       }
       char c = static_cast<char>(plain);
       if (c == 'p' || c == 'P')
@@ -977,6 +981,14 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
       /* Freshly-applied image: don't inherit the previous image's failed
        * boot count (OTA Phase 2 rollback guard, see boot_guard.hpp). */
       BootGuard_ConfirmBoot();
+      /* Bank2 was just erased+reprogrammed by applyToNonSecure(); ICACHE may
+       * still cache pre-erase lines for the NonSecure address range. Jumping
+       * without invalidating makes the CPU fetch stale/garbage instructions
+       * from the freshly-written vector table / Reset_Handler and HardFault -
+       * this only bit large images (v15/v16, ~139 KB) that touch far more
+       * cache lines than the tiny ones OTA was first proven with. A normal
+       * cold boot doesn't need this (Bank2 is untouched since last reset). */
+      (void)HAL_ICACHE_Invalidate();
       Secure_JumpToNonSecure();
       break;
     }
@@ -1007,8 +1019,24 @@ int Service::processRxByte(uint8_t byte, bool fromTcp)
     case FRAME_FEED_PLAIN:
       if (nsDriven)
       {
-        /* Queue for Comm_PollHostCommand() instead of the legacy App_Main
-         * dispatch table - the NS app now owns command handling. */
+        /* Audio streaming on/off must take effect here regardless of link
+         * (UART console or TCP): this used to be handled only inside
+         * pollTcp()'s own byte loop, which never runs for these bytes once
+         * nsDriven routes everything through processRxByte() - UART 'a'/'s'
+         * was a silent no-op and TCP's copy was dead code (pollTcp() feeds
+         * bytes through this same function, so its post-processRxByte
+         * 'a'/'s' check was never reached either). */
+        if (byte == 'a' || byte == 'A')
+        {
+          setAudioStream(true);
+        }
+        else if (byte == 's' || byte == 'S')
+        {
+          setAudioStream(false);
+        }
+        /* Still queue for Comm_PollHostCommand() so the NS app sees every
+         * byte as host activity (IDLE-timer wake) and can handle any other
+         * command itself. */
         nsCmdPush(byte);
         return -1;
       }

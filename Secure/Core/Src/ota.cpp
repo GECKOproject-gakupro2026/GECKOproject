@@ -91,7 +91,13 @@ bool Manager::backupCurrentBank2()
 
   printf("[OTA] backing up current Bank2 (v%lu) to NOR slot B...\r\n",
          (unsigned long)version);
-  for (uint32_t off = 0; off < kBackupMetaOffset; off += kEraseBlock)
+  /* Only the kNsFlashSize (1 MB / 16 blocks) actually holding the image
+   * needs erasing - looping all the way to kBackupMetaOffset (1.9375 MB /
+   * 31 blocks) wasted ~15 blocks erasing NOR that's never written here,
+   * which was slow enough (each 64 KB erase can take on the order of a
+   * second) to blow through the PC tool's 60 s FW_APPLY timeout on its
+   * own, well before Bank2 itself was ever touched. */
+  for (uint32_t off = 0; off < kNsFlashSize; off += kEraseBlock)
   {
     if (BSP_OSPI_NOR_Erase_Block(0, kBackupBase + off, BSP_OSPI_NOR_ERASE_64K) !=
         BSP_ERROR_NONE)
@@ -225,6 +231,15 @@ bool Manager::restoreFromBackup()
   }
   HAL_FLASH_Lock();
 
+  /* Bank2 was just erased+reprogrammed - ICACHE may still hold stale lines
+   * from before the erase (or from Bank2 code that was executing pre-OTA).
+   * Without this, the verify read below can see old/garbage data even
+   * though the flash itself was written correctly (root cause of the
+   * "no reply"/VERIFY-mismatch OTA-apply failures seen with larger
+   * NonSecure images, which touch far more cache lines than the small
+   * images this path was first tested with). */
+  (void)HAL_ICACHE_Invalidate();
+
   const uint16_t crc = crc16Update(0xFFFFU,
       reinterpret_cast<const uint8_t *>(kNsFlashBase), meta.size);
   if (crc != meta.crc16)
@@ -253,6 +268,19 @@ uint8_t Manager::applyToNonSecure()
 
   printf("[OTA] applying %lu-byte NonSecure image to Bank2...\r\n",
          (unsigned long)expected_);
+
+  /* Erasing Bank2 pulls the running NonSecure image out from under any
+   * interrupt whose vector/handler lives there (SCB_NS->VTOR points into
+   * Bank2 once the NS app is running). If a Secure or NonSecure IRQ fires
+   * between the erase and the re-program, the CPU fetches from the now-blank
+   * Bank2 and HardFaults - which is exactly what happened applying a large
+   * image while the NS app was live (small images tested earlier happened to
+   * finish before any such IRQ landed). Mask interrupts across the whole
+   * erase+program window; the FW_APPLY handler jumps straight to the fresh
+   * image afterwards (Secure_JumpToNonSecure re-enables), and the error
+   * paths below re-enable before returning. */
+  __disable_irq();
+
   HAL_FLASH_Unlock();
   FLASH_EraseInitTypeDef erase = {};
   erase.TypeErase = FLASH_TYPEERASE_PAGES_NS;
@@ -263,6 +291,7 @@ uint8_t Manager::applyToNonSecure()
   if (HAL_FLASHEx_Erase(&erase, &pageError) != HAL_OK)
   {
     HAL_FLASH_Lock();
+    __enable_irq();
     printf("[OTA] Bank2 erase failed at page %lu, HAL=0x%08lX\r\n",
            (unsigned long)pageError, (unsigned long)HAL_FLASH_GetError());
     lastError_ = FRAME_ERR_ERASE;
@@ -280,6 +309,7 @@ uint8_t Manager::applyToNonSecure()
                           reinterpret_cast<uint32_t>(quad)) != HAL_OK)
     {
       HAL_FLASH_Lock();
+      __enable_irq();
       printf("[OTA] Bank2 program failed at +0x%08lX, HAL=0x%08lX\r\n",
              (unsigned long)off, (unsigned long)HAL_FLASH_GetError());
       lastError_ = FRAME_ERR_WRITE;
@@ -287,6 +317,17 @@ uint8_t Manager::applyToNonSecure()
     }
   }
   HAL_FLASH_Lock();
+
+  /* Bank2 now holds a complete image again, so it's safe to take interrupts:
+   * the CRC verify + ACK send below need SysTick (HAL_GetTick timeouts) and
+   * the UART TX interrupt. The final jump is protected separately by the
+   * ICACHE invalidate in the FW_APPLY handler. */
+  __enable_irq();
+
+  /* See restoreFromBackup() for why this is required: without invalidating
+   * ICACHE after erase+program, the verify read can return stale cached
+   * data instead of what was just written to Bank2. */
+  (void)HAL_ICACHE_Invalidate();
 
   const uint16_t crc = crc16Update(0xFFFFU,
       reinterpret_cast<const uint8_t *>(kNsFlashBase), expected_);
