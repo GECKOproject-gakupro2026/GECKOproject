@@ -445,64 +445,14 @@ void Service::initAudio()
 
 void Service::initSensors()
 {
-  sensorsOk_ = true;
-
-  /* ToF first: its I2C recovery must run before any other I2C2 user */
+  /* TrustZone Phase C: ToF/env/motion/light sensors and their I2C1/I2C2
+   * buses moved to NonSecure (GTZC flip in Secure main.c). Secure can no
+   * longer touch these peripherals at all, so this is now a no-op except
+   * for the ok-flags, which stay false since Secure has nothing to report
+   * for them (NonSecure fills these FullStatus fields directly). USER
+   * button (PC13) init moved to NonSecure earlier, in Phase B. */
+  sensorsOk_ = false;
   tofOk_ = false;
-  if (BSP_RANGING_SENSOR_Init(0) == BSP_ERROR_NONE)
-  {
-    RANGING_SENSOR_ProfileConfig_t profile = {};
-    profile.RangingProfile = RS_PROFILE_4x4_CONTINUOUS;
-    profile.TimingBudget = 30;
-    profile.Frequency = 5;
-    profile.EnableAmbient = 0;
-    profile.EnableSignal = 0;
-    if (BSP_RANGING_SENSOR_ConfigProfile(0, &profile) == BSP_ERROR_NONE &&
-        BSP_RANGING_SENSOR_Start(0, RS_MODE_ASYNC_CONTINUOUS) == BSP_ERROR_NONE)
-    {
-      tofOk_ = true;
-    }
-  }
-  if (!tofOk_)
-  {
-    printf("[TLM] ToF init failed\r\n");
-  }
-
-  if (BSP_ENV_SENSOR_Init(0, ENV_TEMPERATURE | ENV_HUMIDITY) != BSP_ERROR_NONE ||
-      BSP_ENV_SENSOR_Enable(0, ENV_TEMPERATURE) != BSP_ERROR_NONE ||
-      BSP_ENV_SENSOR_Enable(0, ENV_HUMIDITY) != BSP_ERROR_NONE ||
-      BSP_ENV_SENSOR_Init(1, ENV_PRESSURE) != BSP_ERROR_NONE ||
-      BSP_ENV_SENSOR_Enable(1, ENV_PRESSURE) != BSP_ERROR_NONE)
-  {
-    printf("[TLM] env sensor init failed\r\n");
-    sensorsOk_ = false;
-  }
-  /* Fastest supported output data rates */
-  (void)BSP_ENV_SENSOR_SetOutputDataRate(0, ENV_TEMPERATURE, 12.5f);
-  (void)BSP_ENV_SENSOR_SetOutputDataRate(0, ENV_HUMIDITY, 12.5f);
-  (void)BSP_ENV_SENSOR_SetOutputDataRate(1, ENV_PRESSURE, 75.0f);
-
-  if (BSP_MOTION_SENSOR_Init(0, MOTION_ACCELERO | MOTION_GYRO) != BSP_ERROR_NONE ||
-      BSP_MOTION_SENSOR_Enable(0, MOTION_ACCELERO) != BSP_ERROR_NONE ||
-      BSP_MOTION_SENSOR_Enable(0, MOTION_GYRO) != BSP_ERROR_NONE ||
-      BSP_MOTION_SENSOR_Init(1, MOTION_MAGNETO) != BSP_ERROR_NONE ||
-      BSP_MOTION_SENSOR_Enable(1, MOTION_MAGNETO) != BSP_ERROR_NONE)
-  {
-    printf("[TLM] motion sensor init failed\r\n");
-    sensorsOk_ = false;
-  }
-  (void)BSP_MOTION_SENSOR_SetOutputDataRate(0, MOTION_ACCELERO, 208.0f);
-  (void)BSP_MOTION_SENSOR_SetOutputDataRate(0, MOTION_GYRO, 208.0f);
-  (void)BSP_MOTION_SENSOR_SetOutputDataRate(1, MOTION_MAGNETO, 100.0f);
-
-  if (BSP_LIGHT_SENSOR_Init(0) != BSP_ERROR_NONE ||
-      BSP_LIGHT_SENSOR_Start(0, LIGHT_SENSOR_MODE_CONTINUOUS) != BSP_ERROR_NONE)
-  {
-    printf("[TLM] light sensor init failed\r\n");
-    sensorsOk_ = false;
-  }
-
-  (void)BSP_PB_Init(BUTTON_USER, BUTTON_MODE_GPIO);
 }
 
 /* Raw AT exchange (polling, before the interrupt-driven client starts):
@@ -681,53 +631,13 @@ void Service::refreshMcuInfo(FullStatus &st)
   }
 }
 
-/* Slow sensors on their own schedules (ODR / integration-time limited) */
+/* Slow sensors on their own schedules (ODR / integration-time limited).
+ * TrustZone Phase C: env/light/ToF sensors moved to NonSecure along with
+ * I2C1/I2C2 - Secure can no longer reach them, so only the MCU info refresh
+ * (ADC-based, no I2C) remains here. */
 void Service::refreshSlowSensors(FullStatus &st)
 {
   uint32_t now = HAL_GetTick();
-
-  if (static_cast<int32_t>(now - nextEnvTick_) >= 0)
-  {
-    nextEnvTick_ += kEnvPeriodMs;
-    float f = 0.0f;
-    if (BSP_ENV_SENSOR_GetValue(0, ENV_TEMPERATURE, &f) == BSP_ERROR_NONE)
-    {
-      st.temp_x100 = static_cast<int16_t>(f * 100.0f);
-    }
-    if (BSP_ENV_SENSOR_GetValue(0, ENV_HUMIDITY, &f) == BSP_ERROR_NONE)
-    {
-      st.hum_x100 = static_cast<uint16_t>(f * 100.0f);
-    }
-    if (BSP_ENV_SENSOR_GetValue(1, ENV_PRESSURE, &f) == BSP_ERROR_NONE)
-    {
-      st.press_x100 = static_cast<uint32_t>(f * 100.0f);
-    }
-  }
-
-  if (static_cast<int32_t>(now - nextLightTick_) >= 0)
-  {
-    nextLightTick_ += kLightPeriodMs;
-    uint32_t light[LIGHT_SENSOR_MAX_CHANNELS] = {};
-    if (BSP_LIGHT_SENSOR_GetValues(0, light) == BSP_ERROR_NONE)
-    {
-      st.light_raw = light[0];
-    }
-  }
-
-  if (tofOk_ && static_cast<int32_t>(now - nextTofTick_) >= 0)
-  {
-    nextTofTick_ += kTofPeriodMs;
-    static RANGING_SENSOR_Result_t result;
-    if (BSP_RANGING_SENSOR_GetDistance(0, &result) == BSP_ERROR_NONE)
-    {
-      st.tof_mm = static_cast<uint16_t>(result.ZoneResult[0].Distance[0]);
-      st.tof_ok = 1;
-    }
-    else
-    {
-      st.tof_ok = 0;
-    }
-  }
 
   if (static_cast<int32_t>(now - nextMcuTick_) >= 0)
   {
@@ -740,29 +650,17 @@ void Service::collect(FullStatus &st)
 {
   st.ver = 2;
   st.uptime_ms = HAL_GetTick();
-  st.button = (BSP_PB_GetState(BUTTON_USER) == 1) ? 1U : 0U;
+  /* TrustZone Phase B: the USER button (PC13) moved to NonSecure - it is no
+   * longer readable from here (the pin is NSEC) and the NonSecure app fills
+   * st.button itself before calling Comm_SendTelemetry(). This Secure-side
+   * collect() path only still runs when Stage-0 stays resident as the
+   * interactive OTA loader (button held / bad image), where BSP_PB_GetState
+   * would just read back the same NSEC-released pin - leave it 0 there. */
 
   refreshSlowSensors(st);
-
-  BSP_MOTION_SENSOR_Axes_t axes = {};
-  if (BSP_MOTION_SENSOR_GetAxes(0, MOTION_ACCELERO, &axes) == BSP_ERROR_NONE)
-  {
-    st.acc_mg[0] = static_cast<int16_t>(axes.xval);
-    st.acc_mg[1] = static_cast<int16_t>(axes.yval);
-    st.acc_mg[2] = static_cast<int16_t>(axes.zval);
-  }
-  if (BSP_MOTION_SENSOR_GetAxes(0, MOTION_GYRO, &axes) == BSP_ERROR_NONE)
-  {
-    st.gyro_dps10[0] = static_cast<int16_t>(axes.xval / 100); /* mdps -> dps*10 */
-    st.gyro_dps10[1] = static_cast<int16_t>(axes.yval / 100);
-    st.gyro_dps10[2] = static_cast<int16_t>(axes.zval / 100);
-  }
-  if (BSP_MOTION_SENSOR_GetAxes(1, MOTION_MAGNETO, &axes) == BSP_ERROR_NONE)
-  {
-    st.mag_mgauss[0] = static_cast<int16_t>(axes.xval);
-    st.mag_mgauss[1] = static_cast<int16_t>(axes.yval);
-    st.mag_mgauss[2] = static_cast<int16_t>(axes.zval);
-  }
+  /* TrustZone Phase C: accelero/gyro/mag (ISM330DHCX/IIS2MDC, I2C1) moved
+   * to NonSecure with the rest of the I2C sensors - Secure can no longer
+   * read them, NonSecure fills these FullStatus fields directly. */
 
   /* Audio level from the live circular DMA buffer */
   if (audioOk_)

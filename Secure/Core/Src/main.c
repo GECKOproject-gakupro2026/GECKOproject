@@ -204,12 +204,10 @@ int main(void)
    * takes over as the application layer, Secure never runs its own
    * foreground loop again in that case (only IRQs + whatever a Comm_*
    * gateway call triggers), so every peripheral the comm service (and,
-   * until the Phase C/D moves land, the sensors/audio it still owns) needs
-   * must already be live. This will shrink to just the comm peripherals
-   * (OCTOSPI/SPI2/UART4/USART1) once sensors+audio move to NonSecure. */
+   * until the Phase D move lands, the audio it still owns) needs must
+   * already be live. I2C1/I2C2 init moved to NonSecure in Phase C - the
+   * GTZC flip above means Secure can no longer touch those peripherals. */
   MX_ADF1_Init();
-  MX_I2C1_Init();
-  MX_I2C2_Init();
   MX_ICACHE_Init();
   MX_OCTOSPI1_Init();
   MX_OCTOSPI2_Init();
@@ -439,11 +437,14 @@ static void MX_GTZC_S_Init(void)
   {
     Error_Handler();
   }
-  if (HAL_GTZC_TZSC_ConfigPeriphAttributes(GTZC_PERIPH_I2C1, GTZC_TZSC_PERIPH_SEC|GTZC_TZSC_PERIPH_NPRIV) != HAL_OK)
+  /* TrustZone app-layer refactor Phase C: I2C1/I2C2 (all onboard sensors -
+   * env/motion/light on I2C1, ToF on I2C2) move to NonSecure. Do NOT
+   * regenerate this file from the .ioc - it would revert this to SEC. */
+  if (HAL_GTZC_TZSC_ConfigPeriphAttributes(GTZC_PERIPH_I2C1, GTZC_TZSC_PERIPH_NSEC|GTZC_TZSC_PERIPH_NPRIV) != HAL_OK)
   {
     Error_Handler();
   }
-  if (HAL_GTZC_TZSC_ConfigPeriphAttributes(GTZC_PERIPH_I2C2, GTZC_TZSC_PERIPH_SEC|GTZC_TZSC_PERIPH_NPRIV) != HAL_OK)
+  if (HAL_GTZC_TZSC_ConfigPeriphAttributes(GTZC_PERIPH_I2C2, GTZC_TZSC_PERIPH_NSEC|GTZC_TZSC_PERIPH_NPRIV) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1070,6 +1071,22 @@ static void MX_GPIO_Init(void)
    * explicitly; without this, PH6 remains secure and only one LED responds
    * after the Secure-to-NonSecure jump. */
   HAL_GPIO_ConfigPinAttributes(GPIOH, GPIO_PIN_6 | GPIO_PIN_7, GPIO_PIN_NSEC);
+
+  /* TrustZone app-layer refactor Phase B: USER button (PC13) moves to
+   * NonSecure - it's the app layer's first sensor input, chosen because it
+   * needs no I2C bus (that's the higher-risk Phase C move). Release the pin
+   * the same way PH6/PH7 already are; keep the rest of GPIOC secure. */
+  HAL_GPIO_ConfigPinAttributes(GPIOC, GPIO_PIN_13, GPIO_PIN_NSEC);
+
+  /* Phase C: I2C1 (PB8/PB9, env/motion/light sensors) and I2C2 (PH4/PH5,
+   * ToF) pins move to NonSecure alongside the I2C1/I2C2 GTZC peripheral
+   * flip above - without this the pins stay secure and NonSecure's HAL_I2C
+   * init/transfers fault. PH1 is the VL53L5CX LP (shutdown/reset) pin used
+   * by its bus-recovery sequence (b_u585i_iot02a_ranging_sensor.c
+   * vl53l5cx_i2c_recover()) - without releasing it too, ToF init silently
+   * fails even though the I2C bus itself works. */
+  HAL_GPIO_ConfigPinAttributes(GPIOB, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_NSEC);
+  HAL_GPIO_ConfigPinAttributes(GPIOH, GPIO_PIN_1 | GPIO_PIN_4 | GPIO_PIN_5, GPIO_PIN_NSEC);
 
   /*Configure GPIO pin : MIC_CCK1_Pin */
   GPIO_InitStruct.Pin = MIC_CCK1_Pin;

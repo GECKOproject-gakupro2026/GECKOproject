@@ -187,4 +187,43 @@ NonSecure `App_Main` ループ（現 main.c:145-151 のLEDデモを置換）:
 
 - センサー/音声はまだSecureにある（Phase C/Dで移行）。現状`Comm_Init()`前にI2C1/I2C2/ADF1初期化も行っている（Phase C/Dでこの部分がNonSecure側の初期化に置き換わる）
 - `Secure_ConfirmBoot()`の呼び出しタイミング（起動即時 vs 初回テレメトリ受理後）はまだ見直していない。Phase Eで計画通り「初回`Comm_SendTelemetry()==0`後に確認」へ変更予定
+
+---
+
+## Phase B: 完了・実機検証済み（2026-07-12）
+
+### 実装内容
+
+- `Secure/Core/Src/main.c`: USERボタン(PC13)をGTZC GPIOでNSEC化（PH6/PH7と同じ`HAL_GPIO_ConfigPinAttributes`機構）
+- `Secure/Core/Src/telemetry.cpp`: `Service::collect()`から`BSP_PB_GetState`呼び出しを削除、`Service::initSensors()`から`BSP_PB_Init`を削除（コメントで移行先を明記）
+- `NonSecure/Core/Src/main.c`: `button_init()`/`button_read()`を追加（生GPIO、入力・プルダウン、既存BSP設定を再現）。`build_status()`で`st->button`に実測値を設定
+
+### 実機検証結果
+
+- USERボタン押下でテレメトリの`button`フィールドが0→1に変化することを確認（NonSecure由来の実測値がCMSE境界を越えて反映）
+
+---
+
+## Phase C: 完了・実機検証済み（2026-07-12）
+
+### 実装内容
+
+- `Secure/Core/Src/main.c`: GTZC I2C1/I2C2を`GTZC_TZSC_PERIPH_SEC`→`GTZC_TZSC_PERIPH_NSEC`に変更。I2C1(PB8/PB9)・I2C2(PH4/PH5)・**ToF LP/シャットダウンピン(PH1)**をNSEC化。`MX_I2C1_Init()`/`MX_I2C2_Init()`呼び出しをStage-0起動フローから削除（GTZCフリップ後Secureはこれらのペリフェラルに触れない）
+- `Secure/Core/Src/telemetry.cpp`: `initSensors()`からToF/env/motion/light初期化を全削除（no-op化）。`refreshSlowSensors()`からenv/light/ToF部分を削除（MCU情報更新のみ残す）。`collect()`からモーションセンサー読み取りを削除
+- `NonSecure/Core/Src/sensors.c`＋`sensors.h`（新規）: `Sensors_Init()`/`Sensors_Refresh()`/`Sensors_Stop()`/`Sensors_Resume()`をC言語で実装。BSPセンサードライバ（`BSP_ENV_SENSOR_*`/`BSP_MOTION_SENSOR_*`/`BSP_LIGHT_SENSOR_*`/`BSP_RANGING_SENSOR_*`）は内部で`BSP_I2C1_Init`/`BSP_I2C2_Init`を自動的に呼ぶ自己完結設計のため、NonSecure側で手動I2C初期化は不要と判明
+- `NonSecure/Core/Inc/b_u585i_iot02a_conf.h`（新規）: SecureのCore/Incにあった同名ファイルをコピー（BSPドライバがビルド時に要求する設定ヘッダ）
+- `NonSecure/.cproject`: BSPインクルードパス追加。**ユーザーがCubeIDE GUIでプロジェクトをリフレッシュし、`Drivers`ソースエントリに除外リスト（`excluding=`、Wi-Fi/BLE/EEPROM/OSPI/未使用コンポーネント等Secure専有ドライバを除外）を追加**して解決（ヘッドレスビルドのCDT自動ディスカバリだけでは新規`Drivers/BSP`ディレクトリのソースファイルが認識されなかった）
+
+### 発覚した問題と修正
+
+1. **CDTヘッドレスビルドがBSPドライバを認識しない**: `.cproject`の`sourceEntries`に`Drivers`が指定されていても、ヘッドレスビルド(`stm32cubeidec.exe ... -build`)だけでは新規に追加されたサブディレクトリ(`Drivers/BSP/*`)のソースファイルがコンパイル対象として自動収集されなかった（"Unknown destination type (ARM/Thumb)"のリンクエラーで発覚）。CubeIDE GUIでのプロジェクトリフレッシュが必要だった
+2. **VL53L5CX(ToF)のLPピン(PH1)解放漏れ**: I2C1/I2C2バスとそのGPIO(PB8/PB9、PH4/PH5)をNSEC化しても、ToFセンサー固有の`vl53l5cx_i2c_recover()`（I2Cバスリカバリシーケンス）が使う独立したシャットダウン/LPピン(PH1)がSecureのまま残っていたため、環境/照度/モーションセンサーは正常動作する一方でToF初期化だけ失敗し続けた（`tof_ok=0`固定）。**教訓: センサーのI2Cバス本体だけでなく、専用の制御/リセットGPIOも個別に洗い出してNSEC化する必要がある**
+
+### 実機検証結果
+
+- 環境センサー: 温度41.0℃・湿度36.7%・気圧1006.9hPa（NonSecure由来、妥当な値）
+- 照度センサー: 生値2761（NonSecure由来）
+- モーションセンサー: 加速度Z軸+1013mg（基板水平置きで重力1Gと一致）
+- ToFセンサー（PH1修正後）: `tof_ok=1`、距離1750mm（手をかざして測定、妥当な値）
+- LED: 緑PH7が250ms間隔で正常点滅、NonSecureメインループが全センサー読み取りを含めて正常に周回
 - ボタン押下でOTAローダーに留まるケース（`App_Main()`実行）は`CommInit()`を再利用し`setNsDriven(false)`に戻す設計。今回のセッションでは未検証（通常の自動起動経路のみ確認）

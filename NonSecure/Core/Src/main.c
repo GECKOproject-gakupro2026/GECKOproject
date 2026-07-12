@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "secure_nsc.h"
+#include "sensors.h"
 
 #include <string.h>
 /* USER CODE END Includes */
@@ -36,12 +37,17 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   10U
+#define NS_APP_VERSION   12U
 
 /* User LEDs on this board: LD6 red = PH6, LD7 green = PH7 */
 #define LED_RED_PIN      GPIO_PIN_6
 #define LED_GREEN_PIN    GPIO_PIN_7
 #define LED_PORT         GPIOH
+
+/* USER button (B1): PC13, active-high, pulldown (matches the Secure BSP's
+ * BSP_PB_Init/BUTTON_MODE_GPIO configuration it used before Phase B). */
+#define BUTTON_USER_PIN  GPIO_PIN_13
+#define BUTTON_USER_PORT GPIOC
 
 /* Version banner placed at a fixed offset so the Secure loader (and a host
  * tool) can read the staged/running NonSecure version without executing it.
@@ -93,6 +99,25 @@ static void led_init(void)
   HAL_GPIO_Init(LED_PORT, &gpio);
 }
 
+/* TrustZone app-layer refactor Phase B: first sensor input moved to
+ * NonSecure. PC13 was released NSEC by Secure's MX_GPIO_Init(); this
+ * mirrors the BSP's BUTTON_MODE_GPIO config (input, pulldown). */
+static void button_init(void)
+{
+  GPIO_InitTypeDef gpio = {0};
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  gpio.Pin = BUTTON_USER_PIN;
+  gpio.Mode = GPIO_MODE_INPUT;
+  gpio.Pull = GPIO_PULLDOWN;
+  gpio.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(BUTTON_USER_PORT, &gpio);
+}
+
+static uint8_t button_read(void)
+{
+  return (HAL_GPIO_ReadPin(BUTTON_USER_PORT, BUTTON_USER_PIN) == GPIO_PIN_SET) ? 1U : 0U;
+}
+
 /* OTA demonstration v5: LEDs are active-low. Keep PH6/red off and blink only
  * PH7/green at 2 Hz. */
 static void led_show_version(uint32_t version)
@@ -102,20 +127,17 @@ static void led_show_version(uint32_t version)
   (void)version;
 }
 
-/* Phase A: NonSecure is now the application layer's main loop. It pumps the
- * Secure comm service via Comm_Poll() and submits a telemetry snapshot
- * through the Comm_SendTelemetry() NSC gateway - still a dummy payload here
- * (sensors move over in later phases), but this proves the FullStatus_t
- * struct crosses the CMSE boundary intact and Secure transmits it. */
-static uint32_t g_dummyCounter = 0U;
-
-static void build_dummy_status(FullStatus_t *st)
+/* NonSecure is the application layer's main loop. It pumps the Secure comm
+ * service via Comm_Poll() and submits a telemetry snapshot through the
+ * Comm_SendTelemetry() NSC gateway. Phase C: env/motion/light/ToF sensors
+ * (I2C1/I2C2) are now read here too; audio/AI/MCU-info fields stay zeroed
+ * until Phase D/F. */
+static void build_status(FullStatus_t *st)
 {
-  memset(st, 0, sizeof(*st));
+  Sensors_Refresh(st);
   st->ver = 2U;
   st->uptime_ms = HAL_GetTick();
-  st->button = (uint8_t)(g_dummyCounter & 0xFFU);
-  g_dummyCounter++;
+  st->button = button_read();
 }
 /* USER CODE END 0 */
 
@@ -149,6 +171,8 @@ int main(void)
   /* Initialize all configured peripherals */
   /* USER CODE BEGIN 2 */
   led_init();
+  button_init();
+  Sensors_Init();
   /* Publish the running version for the Secure side / host tools */
   *(volatile uint32_t *)NS_RUNNING_VERSION_ADDR = g_ns_appinfo.version;
   /* Startup reached the main loop without a fault: tell the Secure Stage-0
@@ -172,8 +196,9 @@ int main(void)
     if ((int32_t)(now - nextTelemetryTick) >= 0)
     {
       nextTelemetryTick = now + 20U; /* 50 Hz, matches the legacy Secure rate */
-      FullStatus_t st;
-      build_dummy_status(&st);
+      /* Keep the last slow-sensor values between 20 ms telemetry frames. */
+      static FullStatus_t st;
+      build_status(&st);
       (void)Comm_SendTelemetry(&st);
     }
 

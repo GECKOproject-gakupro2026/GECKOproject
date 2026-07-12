@@ -52,6 +52,11 @@
 									<listOptionValue builtIn="false" value="../../Drivers/CMSIS/Device/ST/STM32U5xx/Include"/>
 									<listOptionValue builtIn="false" value="../../Drivers/STM32U5xx_HAL_Driver/Inc/Legacy"/>
 									<listOptionValue builtIn="false" value="../../Drivers/CMSIS/Include"/>
+									<listOptionValue builtIn="false" value="../../Drivers/BSP/B-U585I-IOT02A"/>
+									<listOptionValue builtIn="false" value="../../Drivers/BSP/Components/Common"/>
+									<listOptionValue builtIn="false" value="../../Drivers/BSP/Components/vl53l5cx"/>
+									<listOptionValue builtIn="false" value="../../Drivers/BSP/Components/vl53l5cx/modules"/>
+									<listOptionValue builtIn="false" value="../../Drivers/BSP/Components/vl53l5cx/porting"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1339871197" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -84,7 +89,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="LPBAM"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Utilities"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
-						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
+						<entry excluding="BSP/B-U585I-IOT02A/b_u585i_iot02a_audio.c|BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c|BSP/B-U585I-IOT02A/b_u585i_iot02a_ospi.c|BSP/Components/aps6408|BSP/Components/m24256|BSP/Components/mx25lm51245g|BSP/Components/mx_wifi|BSP/Components/stm32wb_at|BSP/Components/veml6030" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -171,7 +176,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="LPBAM"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Utilities"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
-						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
+						<entry excluding="BSP/B-U585I-IOT02A/b_u585i_iot02a_audio.c|BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c|BSP/B-U585I-IOT02A/b_u585i_iot02a_ospi.c|BSP/Components/aps6408|BSP/Components/m24256|BSP/Components/mx25lm51245g|BSP/Components/mx_wifi|BSP/Components/stm32wb_at|BSP/Components/veml6030" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
