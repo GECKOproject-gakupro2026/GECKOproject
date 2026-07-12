@@ -258,3 +258,30 @@ NonSecure `App_Main` ループ（現 main.c:145-151 のLEDデモを置換）:
 ### 次フェーズへの申し送り
 
 - Phase D-2(AI推論のNonSecure化)は未着手。C++サポート追加とCubeAIライブラリ(`NetworkRuntime1020_CM33_GCC.a`)のNonSecureリンクが必要で、`.project`のlinked resources問題やC++ツール設定を考えると大掛かり。`Comm_GetAudioBuffer`ゲートウェイは既にあるのでAI側は音声取得済み
+
+---
+
+## Phase E: 完了・実機検証済み（2026-07-12）
+
+### 実装内容
+
+- `NonSecure/Core/Inc/app_config.h`（新規）: `CFG_IDLE_TIMEOUT_MS=3000`（テスト値）、`CFG_IDLE_LED_BLINK_MS=1000`、`CFG_ACTIVE_HB_MS=250`、`CFG_ACTIVE_TELEMETRY_MS=20`
+- `NonSecure/Core/Src/main.c`: メインループをACTIVE/IDLEステートマシンに書き換え
+  - **ACTIVE**: センサー読み+50Hzテレメトリ送信+緑PH7ハートビート点滅
+  - **IDLE遷移**: `CFG_IDLE_TIMEOUT_MS`(3秒)無通信で `Sensors_Stop()`(ToF停止)+`Audio_Stop()`+`Comm_SetTelemetryEnabled(0)`+緑消灯、赤PH6を1秒間隔スロー点滅
+  - **ACTIVE復帰**: `Comm_PollHostCommand()`が非ゼロ(=任意の受信バイト=ホスト活動)を返したら即 `Sensors_Resume()`+`Audio_Resume()`+`Comm_SetTelemetryEnabled(1)`
+  - LED極性を統一(SET=消灯/RESET=点灯、両LED共通)、`led_show_version`を`led_green/red_off/toggle`に置換
+- `pc_side/status_monitor/app.py`: 低消費電力対応
+  - `_update_rate`(1Hz)で「常時ACTIVE維持」ON時に keep-alive バイト`\x00`を毎秒送信(ボードは任意の受信バイトを活動とみなすため、これでACTIVE維持)
+  - トップバーに「常時ACTIVE維持」チェックボックス+「電源: ACTIVE/IDLE(低消費電力)」表示を追加(フレームレート>0でACTIVE、0でIDLE判定)
+
+### 実機検証結果
+
+- 起動後、無通信で約3秒→IDLE移行、赤LEDが1秒間隔でスロー点滅、テレメトリ停止(v2SOF=0)を確認
+- IDLE中に1バイト送信→即ACTIVE復帰、テレメトリが55fpsで再開、全センサー(温度41.58℃)+音声(rms=360)復活を確認
+- keep-alive相当(1秒ごとに1バイト送信)でACTIVE維持(50fps継続)を確認 → PC側app.pyの設計が実機で機能
+
+### 設計上の重要点
+
+- **ウェイク検知は純ポーリング**: Secure通信スタックはIDLE中もリスナー稼働(UART RX DMA/pollTcp/UART4はNonSecureモードに非依存)。バイト着信でSecure受信リング/nsActivityフラグが立ち、NonSecureの次の`Comm_PollHostCommand`が非ゼロを返す。割り込みをNonSecureへ入れる必要なし
+- **PC側keep-aliveの`\x00`**: フレームSOF(0xAA)ではないので`FRAME_FEED_PLAIN`扱い→活動フラグは立つがコマンドとしては無害。nsCmdRingは16バイト循環で溢れても安全

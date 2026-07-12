@@ -56,6 +56,13 @@ class StatusMonitorApp:
         self.record_samples: list[int] = []
         self.last_wav: pathlib.Path | None = None
 
+        # Phase E low-power support: the firmware idles (stops telemetry, slow-
+        # blinks its red LED) after ~3 s with no host traffic. Keep it awake by
+        # sending a lightweight keep-alive byte each second while "keep awake"
+        # is on, and show ACTIVE/IDLE based on whether frames are arriving.
+        self.keep_awake = True
+        self.power_state = "?"
+
         self._build_ui()
         root.after(self.POLL_MS, self._poll_queue)
         root.after(1000, self._update_rate)
@@ -78,6 +85,13 @@ class StatusMonitorApp:
 
         self.connect_btn = ttk.Button(top, text="接続", command=self._toggle_connect)
         self.connect_btn.pack(side="left", padx=8)
+
+        # Phase E: low-power state readout + keep-awake toggle.
+        self.keep_awake_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(top, text="常時ACTIVE維持", variable=self.keep_awake_var,
+                        command=self._on_keep_awake_toggle).pack(side="left", padx=8)
+        self.power_var = tk.StringVar(value="電源: ?")
+        ttk.Label(top, textvariable=self.power_var).pack(side="left", padx=4)
 
         self.rate_var = tk.StringVar(value="0 fps")
         ttk.Label(top, textvariable=self.rate_var).pack(side="right")
@@ -299,6 +313,12 @@ class StatusMonitorApp:
         self.transport.start()
         self.connect_btn.configure(text="切断")
 
+    # ---------------- low-power (Phase E) ----------------
+    def _on_keep_awake_toggle(self) -> None:
+        self.keep_awake = self.keep_awake_var.get()
+        # When turning keep-awake off, the board will idle within ~3 s; when
+        # turning it on, the next 1 Hz keep-alive wakes it back to ACTIVE.
+
     # ---------------- audio controls ----------------
     def _set_stream(self, enable: bool) -> None:
         if self.transport is None:
@@ -398,6 +418,21 @@ class StatusMonitorApp:
         self._tree_set("_frames", str(self.parser.frames))
         self._tree_set("_crc", str(self.parser.crc_errors))
         self._tree_set("_audio_frames", str(self.audio_frames))
+
+        # Phase E: keep the board awake (1 Hz keep-alive) and reflect its
+        # low-power state. The firmware counts ANY inbound byte as host
+        # activity, so a single harmless byte per second holds it in ACTIVE.
+        if self.transport is not None and self.keep_awake:
+            self.transport.write(b"\x00")  # NUL: not a console command, just activity
+        if self.transport is None:
+            self.power_state = "?"
+        elif rate > 0:
+            self.power_state = "ACTIVE"
+        else:
+            self.power_state = "IDLE (低消費電力)"
+        if hasattr(self, "power_var"):
+            self.power_var.set(f"電源: {self.power_state}")
+
         self.root.after(1000, self._update_rate)
 
     # ---------------- rendering ----------------

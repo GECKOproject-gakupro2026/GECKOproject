@@ -24,6 +24,7 @@
 #include "secure_nsc.h"
 #include "sensors.h"
 #include "ns_audio.h"
+#include "app_config.h"
 
 #include <string.h>
 /* USER CODE END Includes */
@@ -38,7 +39,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   14U
+#define NS_APP_VERSION   15U
 
 /* User LEDs on this board: LD6 red = PH6, LD7 green = PH7 */
 #define LED_RED_PIN      GPIO_PIN_6
@@ -98,6 +99,8 @@ static void led_init(void)
   gpio.Pull = GPIO_NOPULL;
   gpio.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED_PORT, &gpio);
+  /* both off (PH6/PH7 read off = SET on this board's LED wiring) */
+  HAL_GPIO_WritePin(LED_PORT, LED_RED_PIN | LED_GREEN_PIN, GPIO_PIN_SET);
 }
 
 /* TrustZone app-layer refactor Phase B: first sensor input moved to
@@ -119,14 +122,13 @@ static uint8_t button_read(void)
   return (HAL_GPIO_ReadPin(BUTTON_USER_PORT, BUTTON_USER_PIN) == GPIO_PIN_SET) ? 1U : 0U;
 }
 
-/* OTA demonstration v5: LEDs are active-low. Keep PH6/red off and blink only
- * PH7/green at 2 Hz. */
-static void led_show_version(uint32_t version)
-{
-  HAL_GPIO_WritePin(LED_PORT, LED_RED_PIN, GPIO_PIN_SET);   /* PH6 off */
-  HAL_GPIO_TogglePin(LED_PORT, LED_GREEN_PIN);
-  (void)version;
-}
+/* Both user LEDs use the same wiring: SET = off, RESET = on (matches the
+ * long-standing NonSecure demo where green blinked via TogglePin and red
+ * was held off with SET). */
+static void led_green_off(void) { HAL_GPIO_WritePin(LED_PORT, LED_GREEN_PIN, GPIO_PIN_SET); }
+static void led_red_off(void)   { HAL_GPIO_WritePin(LED_PORT, LED_RED_PIN, GPIO_PIN_SET); }
+static void led_green_toggle(void) { HAL_GPIO_TogglePin(LED_PORT, LED_GREEN_PIN); }
+static void led_red_toggle(void)   { HAL_GPIO_TogglePin(LED_PORT, LED_RED_PIN); }
 
 /* NonSecure is the application layer's main loop. It pumps the Secure comm
  * service via Comm_Poll() and submits a telemetry snapshot through the
@@ -184,8 +186,16 @@ int main(void)
   Secure_ConfirmBoot();
   /* USER CODE END 2 */
 
-  /* Infinite loop */
+  /* Infinite loop
+   * TrustZone Phase E: ACTIVE/IDLE low-power state machine. In ACTIVE the app
+   * reads sensors, streams 50 Hz telemetry and blinks the green heartbeat.
+   * After CFG_IDLE_TIMEOUT_MS with no host command it drops to IDLE: sensors
+   * and telemetry stop (Secure comm push is quieted too), ToF stops ranging,
+   * and the red LED slow-blinks. Any inbound host activity - which the Secure
+   * comm stack keeps listening for even in IDLE - wakes it back to ACTIVE. */
   /* USER CODE BEGIN WHILE */
+  enum { MODE_ACTIVE = 0, MODE_IDLE = 1 } mode = MODE_ACTIVE;
+  uint32_t lastActivityMs = HAL_GetTick(); /* start ACTIVE, not instantly idle */
   uint32_t nextTelemetryTick = 0U;
   uint32_t nextLedTick = 0U;
   while (1)
@@ -196,22 +206,63 @@ int main(void)
     Comm_Poll(); /* pumps the Secure comm service (TCP/OTA/BLE/audio) */
 
     uint32_t now = HAL_GetTick();
-    if ((int32_t)(now - nextTelemetryTick) >= 0)
+
+    /* Poll host input every loop (even in IDLE) - this is the wake source. */
+    uint8_t cmdByte = 0U;
+    if (Comm_PollHostCommand(&cmdByte) != COMM_POLL_NONE)
     {
-      nextTelemetryTick = now + 20U; /* 50 Hz, matches the legacy Secure rate */
-      /* Keep the last slow-sensor values between 20 ms telemetry frames. */
-      static FullStatus_t st;
-      build_status(&st);
-      (void)Comm_SendTelemetry(&st);
+      lastActivityMs = now; /* any inbound host traffic counts as activity */
     }
 
-    uint8_t cmdByte = 0U;
-    (void)Comm_PollHostCommand(&cmdByte);
-
-    if ((int32_t)(now - nextLedTick) >= 0)
+    if (mode == MODE_ACTIVE)
     {
-      nextLedTick = now + 250U;
-      led_show_version(g_ns_appinfo.version);
+      if ((int32_t)(now - lastActivityMs) >= (int32_t)CFG_IDLE_TIMEOUT_MS)
+      {
+        /* Enter IDLE: stop sensors/telemetry, quiet the Secure links. */
+        mode = MODE_IDLE;
+        Sensors_Stop();
+        Audio_Stop();
+        Comm_SetTelemetryEnabled(0U);
+        led_green_off();
+        led_red_off();
+        nextLedTick = now;
+      }
+      else
+      {
+        if ((int32_t)(now - nextTelemetryTick) >= 0)
+        {
+          nextTelemetryTick = now + CFG_ACTIVE_TELEMETRY_MS;
+          static FullStatus_t st;
+          build_status(&st);
+          (void)Comm_SendTelemetry(&st);
+        }
+        if ((int32_t)(now - nextLedTick) >= 0)
+        {
+          nextLedTick = now + CFG_ACTIVE_HB_MS;
+          led_red_off();
+          led_green_toggle(); /* green heartbeat */
+        }
+      }
+    }
+    else /* MODE_IDLE */
+    {
+      if ((int32_t)(now - lastActivityMs) < (int32_t)CFG_IDLE_TIMEOUT_MS)
+      {
+        /* Woke on host activity: resume ACTIVE. */
+        mode = MODE_ACTIVE;
+        Sensors_Resume();
+        Audio_Resume();
+        Comm_SetTelemetryEnabled(1U);
+        led_red_off();
+        nextTelemetryTick = now;
+        nextLedTick = now;
+      }
+      else if ((int32_t)(now - nextLedTick) >= 0)
+      {
+        nextLedTick = now + CFG_IDLE_LED_BLINK_MS;
+        led_green_off();
+        led_red_toggle(); /* red slow blink = low-power indicator */
+      }
     }
   }
   /* USER CODE END 3 */
