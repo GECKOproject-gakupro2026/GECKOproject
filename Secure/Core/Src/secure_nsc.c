@@ -23,9 +23,21 @@
 #include "main.h"
 #include "secure_nsc.h"
 
+#include <arm_cmse.h>
+#include <string.h>
+
 /* Implemented in boot_guard.cpp (C++); confirmBoot() itself is C++-only
  * (namespaced), so this thin extern "C" wrapper is what secure_nsc.c calls. */
 extern void BootGuard_ConfirmBoot(void);
+
+/* Implemented in telemetry.cpp (C++ comm service); these extern "C" bridges
+ * only ever receive Secure-local pointers - the CMSE gateways below validate
+ * and copy NonSecure buffers before calling them. */
+extern void CommBridge_Poll(void);
+extern int CommBridge_SendTelemetry(const FullStatus_t *st);
+extern int CommBridge_PollHostCommand(uint8_t *out);
+extern void CommBridge_SetTelemetryEnabled(uint32_t on);
+extern uint32_t CommBridge_GetLinkStatus(void);
 /** @addtogroup STM32U5xx_HAL_Examples
 
   * @{
@@ -79,6 +91,74 @@ void *pSecureErrorCallback = NULL;   /* Pointer to secure error callback in Non-
 CMSE_NS_ENTRY void Secure_ConfirmBoot(void)
 {
   BootGuard_ConfirmBoot();
+}
+
+/* ---- Comm_* gateways (NonSecure app layer -> Secure comm stack) ---------- */
+
+/**
+  * @brief  One scheduler pass of the Secure comm service (TCP/OTA/BLE/audio).
+  *         The NonSecure main loop must call this every iteration.
+  */
+CMSE_NS_ENTRY void Comm_Poll(void)
+{
+  CommBridge_Poll();
+}
+
+/**
+  * @brief  Submits a NonSecure-produced telemetry snapshot for transmission.
+  * @retval 0 accepted, -1 bad pointer, -2 comm service not ready
+  */
+CMSE_NS_ENTRY int Comm_SendTelemetry(const FullStatus_t *st)
+{
+  /* The pointer comes from the NonSecure world: verify it really points at
+   * NonSecure-readable memory of the right size, then copy to Secure stack
+   * before use, so NonSecure can neither alias Secure RAM nor mutate the
+   * buffer mid-transmission. */
+  if (cmse_check_address_range((void *)st, sizeof(FullStatus_t),
+                               CMSE_NONSECURE | CMSE_MPU_READ) == NULL)
+  {
+    return -1;
+  }
+  FullStatus_t local;
+  memcpy(&local, st, sizeof(local));
+  return CommBridge_SendTelemetry(&local);
+}
+
+/**
+  * @brief  Drains one plain host-command byte / reports inbound activity.
+  * @retval COMM_POLL_BYTE (byte written to *out), COMM_POLL_ACTIVITY,
+  *         COMM_POLL_NONE, or -1 on bad pointer
+  */
+CMSE_NS_ENTRY int Comm_PollHostCommand(uint8_t *out)
+{
+  if (cmse_check_address_range(out, sizeof(uint8_t),
+                               CMSE_NONSECURE | CMSE_MPU_READWRITE) == NULL)
+  {
+    return -1;
+  }
+  uint8_t byte = 0U;
+  int ret = CommBridge_PollHostCommand(&byte);
+  if (ret == COMM_POLL_BYTE)
+  {
+    *out = byte;
+  }
+  return ret;
+}
+
+/**
+  * @brief  Enables/disables the Secure telemetry push (low-power support).
+  */
+CMSE_NS_ENTRY void Comm_SetTelemetryEnabled(uint32_t on)
+{
+  CommBridge_SetTelemetryEnabled(on);
+}
+
+/**
+  * @brief  Link status bits: 0=BLE alive, 1=WiFi up, 2=BLE conn, 3=TCP client.
+  */
+CMSE_NS_ENTRY uint32_t Comm_GetLinkStatus(void)
+{
+  return CommBridge_GetLinkStatus();
 }
 
 /**

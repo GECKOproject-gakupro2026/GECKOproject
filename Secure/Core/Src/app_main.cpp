@@ -66,11 +66,6 @@ static void bleBridge(void)
 
 extern "C" void App_Main(void)
 {
-  /* Speed up the VCP link (USB-bridged by the ST-LINK) beyond the 115200
-   * CubeMX default */
-  huart1.Init.BaudRate = CFG_CONSOLE_BAUDRATE;
-  (void)HAL_UART_Init(&huart1);
-
   printf("\r\n\r\n===== B-U585I-IOT02A status telemetry firmware =====\r\n");
   printf("SYSCLK=%lu Hz, build " __DATE__ " " __TIME__ "\r\n",
          HAL_RCC_GetSysClockFreq());
@@ -83,8 +78,13 @@ extern "C" void App_Main(void)
   BSP_LED_Off(LED_GREEN);
   g_LedBlinkEnable = 1;
 
-  static telemetry::Service service;
-  service.init();
+  /* Comm_Init() (called from Secure main() before the Stage-0 jump) already
+   * constructed and initialized the single Service instance in
+   * NonSecure-driven mode. Reaching App_Main() means Stage-0 decided to stay
+   * resident (button held / no valid NonSecure image) - reuse that same
+   * instance as the interactive Secure-side loader instead of Comm_Poll(). */
+  telemetry::Service &service = telemetry::CommInit();
+  service.setNsDriven(false);
 
   auto inferAndPrint = []() {
     aiapp::Result r;

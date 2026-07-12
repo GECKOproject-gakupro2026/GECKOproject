@@ -22,6 +22,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "secure_nsc.h"
+
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -34,7 +36,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   9U
+#define NS_APP_VERSION   10U
 
 /* User LEDs on this board: LD6 red = PH6, LD7 green = PH7 */
 #define LED_RED_PIN      GPIO_PIN_6
@@ -98,7 +100,22 @@ static void led_show_version(uint32_t version)
   HAL_GPIO_WritePin(LED_PORT, LED_RED_PIN, GPIO_PIN_SET);   /* PH6 off */
   HAL_GPIO_TogglePin(LED_PORT, LED_GREEN_PIN);
   (void)version;
-  HAL_Delay(250);
+}
+
+/* Phase A: NonSecure is now the application layer's main loop. It pumps the
+ * Secure comm service via Comm_Poll() and submits a telemetry snapshot
+ * through the Comm_SendTelemetry() NSC gateway - still a dummy payload here
+ * (sensors move over in later phases), but this proves the FullStatus_t
+ * struct crosses the CMSE boundary intact and Secure transmits it. */
+static uint32_t g_dummyCounter = 0U;
+
+static void build_dummy_status(FullStatus_t *st)
+{
+  memset(st, 0, sizeof(*st));
+  st->ver = 2U;
+  st->uptime_ms = HAL_GetTick();
+  st->button = (uint8_t)(g_dummyCounter & 0xFFU);
+  g_dummyCounter++;
 }
 /* USER CODE END 0 */
 
@@ -142,12 +159,32 @@ int main(void)
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  uint32_t nextTelemetryTick = 0U;
+  uint32_t nextLedTick = 0U;
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    led_show_version(g_ns_appinfo.version);
+    Comm_Poll(); /* pumps the Secure comm service (TCP/OTA/BLE/audio) */
+
+    uint32_t now = HAL_GetTick();
+    if ((int32_t)(now - nextTelemetryTick) >= 0)
+    {
+      nextTelemetryTick = now + 20U; /* 50 Hz, matches the legacy Secure rate */
+      FullStatus_t st;
+      build_dummy_status(&st);
+      (void)Comm_SendTelemetry(&st);
+    }
+
+    uint8_t cmdByte = 0U;
+    (void)Comm_PollHostCommand(&cmdByte);
+
+    if ((int32_t)(now - nextLedTick) >= 0)
+    {
+      nextLedTick = now + 250U;
+      led_show_version(g_ns_appinfo.version);
+    }
   }
   /* USER CODE END 3 */
 }

@@ -122,6 +122,11 @@ extern uint32_t BootGuard_AttemptCount(void);
 extern void BootGuard_NoteBootAttempt(void);
 extern void BootGuard_ConfirmBoot(void);
 extern int OTA_RestoreFromBackup(void);
+
+/* telemetry.cpp: brings up the comm service in NonSecure-driven mode
+ * (Comm_Poll() NSC gateway pumps it once NonSecure takes over as the
+ * application layer). Must run before the Stage-0 jump below. */
+extern void Comm_Init(void);
 #define BOOT_GUARD_MAX_ATTEMPTS  3U
 /* USER CODE END 0 */
 
@@ -193,12 +198,15 @@ int main(void)
 
   (void)BSP_PB_Init(BUTTON_USER, BUTTON_MODE_GPIO);
   HAL_Delay(20U);
-  if (NonSecure_ImageIsValid() && BSP_PB_GetState(BUTTON_USER) == 0)
-  {
-    BootGuard_NoteBootAttempt();
-    Secure_JumpToNonSecure();
-  }
 
+  /* USER CODE BEGIN 2 */
+  /* Full bring-up now happens BEFORE the Stage-0 jump below: once NonSecure
+   * takes over as the application layer, Secure never runs its own
+   * foreground loop again in that case (only IRQs + whatever a Comm_*
+   * gateway call triggers), so every peripheral the comm service (and,
+   * until the Phase C/D moves land, the sensors/audio it still owns) needs
+   * must already be live. This will shrink to just the comm peripherals
+   * (OCTOSPI/SPI2/UART4/USART1) once sensors+audio move to NonSecure. */
   MX_ADF1_Init();
   MX_I2C1_Init();
   MX_I2C2_Init();
@@ -210,9 +218,18 @@ int main(void)
   MX_USART1_UART_Init();
   MX_UCPD1_Init();
   MX_USB_OTG_FS_PCD_Init();
-  /* USER CODE BEGIN 2 */
-  App_Main(); /* never returns */
+  Comm_Init();
   /* USER CODE END 2 */
+
+  if (NonSecure_ImageIsValid() && BSP_PB_GetState(BUTTON_USER) == 0)
+  {
+    BootGuard_NoteBootAttempt();
+    Secure_JumpToNonSecure();
+  }
+
+  /* Button held or no valid NonSecure image: stay resident as the Wi-Fi OTA
+   * loader, running the interactive Secure-side telemetry/test app. */
+  App_Main(); /* never returns */
 
   /*************** Setup and jump to non-secure *******************************/
 
@@ -241,13 +258,13 @@ void Secure_JumpToNonSecure(void)
 {
   funcptr_NS NonSecure_ResetHandler;
 
+  /* Secure stays a live service after this jump: the NonSecure app pumps it
+   * through the Comm_* NSC gateways and the Secure comm IRQs (USART1 TX IT,
+   * UART4 BLE RX, Wi-Fi SPI EXTI, GPDMA console RX) plus the Secure SysTick
+   * (HAL_GetTick timeouts) must keep running. Do NOT stop SysTick or mass-
+   * disable the NVIC here - that freezes every Secure-side timeout the next
+   * Comm_Poll() hits and hangs the whole system. */
   __disable_irq();
-  SysTick->CTRL = 0U;
-  for (uint32_t i = 0; i < 16U; i++)
-  {
-    NVIC->ICER[i] = 0xFFFFFFFFU;
-    NVIC->ICPR[i] = 0xFFFFFFFFU;
-  }
 
   SCB_NS->VTOR = VTOR_TABLE_NS_START_ADDR;
 

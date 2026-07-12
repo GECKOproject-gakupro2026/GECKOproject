@@ -98,6 +98,20 @@ public:
    * back for the legacy single-character command handling. */
   int processRxByte(uint8_t byte, bool fromTcp);
 
+  /* NonSecure-driven mode (the NS app is the main loop and pumps poll() via
+   * the Comm_Poll NSC gateway): poll() pumps the console itself and plain
+   * command bytes are queued for the NS app instead of App_Main. */
+  void setNsDriven(bool on);
+
+  /* Accepts a telemetry snapshot produced by the NonSecure app and sends it
+   * over UART + TCP now (BLE keeps its own pace off the stored status).
+   * The first call switches off the Secure-side status generation. */
+  void submitExternalStatus(const FullStatus &st);
+
+  /* bit1 = Wi-Fi joined, bit3 = TCP client connected (used by
+   * Comm_GetLinkStatus; BLE bits are read directly from file-scope state). */
+  uint32_t wifiTcpLinkBits() const;
+
 private:
   void handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
                    uint16_t len, bool fromTcp);
@@ -134,6 +148,15 @@ private:
   bool tofOk_ = false;
   bool audioStream_ = false;
 };
+
+/* Brings up the comm service (and, until the Phase C/D moves land, the
+ * sensors/audio it still owns) and switches it into NonSecure-driven mode:
+ * Comm_Poll() pumps it instead of App_Main()'s loop, and plain host command
+ * bytes queue for Comm_PollHostCommand() instead of the legacy dispatch
+ * table. Called once from Secure main() before the Stage-0 NonSecure jump.
+ * Returns the Service instance so App_Main() can reuse it (and flip
+ * nsDriven back off) if Stage-0 stays resident as the interactive loader. */
+Service &CommInit();
 
 } // namespace telemetry
 

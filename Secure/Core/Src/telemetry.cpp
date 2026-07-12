@@ -7,6 +7,8 @@
 #include "telemetry.hpp"
 
 #include "app_config.h"
+#include "comm_dto.h"
+#include "console.h"
 #include "frame_codec.h"
 #include "main.h"
 #include "ota.hpp"
@@ -198,6 +200,30 @@ ota::Manager otaMgr;
 Frame_Decoder uartDecoder = {};
 Frame_Decoder tcpDecoder = {};
 uint8_t respSeq = 0;
+
+/* --- NonSecure-driven mode state (Comm_* NSC gateways, see secure_nsc.c).
+ * The NS app is the main loop: it pumps poll() through Comm_Poll() and
+ * drains plain host-command bytes from this ring via Comm_PollHostCommand().
+ * Single-threaded (NS superloop), so no locking needed; nsActivity is also
+ * set from the BLE UART IRQ, hence volatile. --- */
+Service *g_service = nullptr;
+bool nsDriven = false;          /* NS app pumps the loop                    */
+bool nsTelemetryActive = false; /* NS has taken over status production      */
+bool telemetryEnabled = true;   /* Comm_SetTelemetryEnabled (low-power)     */
+volatile bool nsActivity = false; /* any inbound host traffic since poll    */
+uint8_t nsCmdRing[16];
+uint8_t nsCmdHead = 0;
+uint8_t nsCmdTail = 0;
+
+void nsCmdPush(uint8_t byte)
+{
+  uint8_t next = static_cast<uint8_t>((nsCmdHead + 1U) % sizeof(nsCmdRing));
+  if (next != nsCmdTail) /* on overflow: drop newest, keep the queue sane */
+  {
+    nsCmdRing[nsCmdHead] = byte;
+    nsCmdHead = next;
+  }
+}
 
 constexpr uint16_t mxHtons(uint16_t v)
 {
@@ -539,6 +565,8 @@ void Service::initRadio()
 
 void Service::init()
 {
+  g_service = this; /* Comm_* NSC gateways dispatch through this instance */
+
   /* Interrupt-driven TX on the VCP link */
   HAL_NVIC_SetPriority(USART1_IRQn, 12, 0);
   HAL_NVIC_EnableIRQ(USART1_IRQn);
@@ -1062,16 +1090,75 @@ int Service::processRxByte(uint8_t byte, bool fromTcp)
   uint8_t seq = 0;
   const uint8_t *payload = nullptr;
   uint16_t len = 0;
-  switch (Frame_DecoderFeed(&dec, byte, &cmd, &seq, &payload, &len))
+  Frame_FeedResult fed = Frame_DecoderFeed(&dec, byte, &cmd, &seq, &payload, &len);
+  if (nsDriven)
+  {
+    /* Any inbound byte counts as host activity for the NS idle timer,
+     * regardless of whether it turns into a frame or a plain command. */
+    nsActivity = true;
+  }
+  switch (fed)
   {
     case FRAME_FEED_COMPLETE:
       handleFrame(cmd, seq, payload, len, fromTcp);
       return -1;
     case FRAME_FEED_PLAIN:
+      if (nsDriven)
+      {
+        /* Queue for Comm_PollHostCommand() instead of the legacy App_Main
+         * dispatch table - the NS app now owns command handling. */
+        nsCmdPush(byte);
+        return -1;
+      }
       return byte;
     default:
       return -1;
   }
+}
+
+void Service::setNsDriven(bool on)
+{
+  nsDriven = on;
+}
+
+void Service::submitExternalStatus(const FullStatus &st)
+{
+  nsTelemetryActive = true;
+  status_ = st;
+  if (!telemetryEnabled)
+  {
+    return;
+  }
+  sendUart(status_);
+  sendTcp(status_);
+}
+
+Service &CommInit()
+{
+  /* Speed up the VCP link (USB-bridged by the ST-LINK) beyond the 115200
+   * CubeMX default - must happen before anything prints or a host tool
+   * expecting CFG_CONSOLE_BAUDRATE will see nothing. */
+  huart1.Init.BaudRate = CFG_CONSOLE_BAUDRATE;
+  (void)HAL_UART_Init(&huart1);
+
+  static Service service;
+  service.init();
+  service.setNsDriven(true);
+  return service;
+}
+
+uint32_t Service::wifiTcpLinkBits() const
+{
+  uint32_t bits = 0;
+  if (status_.wifi_alive != 0U)
+  {
+    bits |= (1U << 1);
+  }
+  if (tcpClientFd >= 0)
+  {
+    bits |= (1U << 3);
+  }
+  return bits;
 }
 
 void Service::poll()
@@ -1082,9 +1169,27 @@ void Service::poll()
   static uint32_t profStart = 0, profPrints = 0;
   static uint32_t profFrames = 0, profLoops = 0;
 
+  if (nsDriven)
+  {
+    /* In NonSecure-driven mode nobody else pumps the console RX path
+     * (App_Main()'s loop, which used to do this, doesn't run) - poll() is
+     * the only place left, since Comm_Poll() is the NS app's single pump
+     * point for the whole comm service. */
+    int key = Console_GetChar(0);
+    if (key >= 0)
+    {
+      (void)processRxByte(static_cast<uint8_t>(key), false);
+    }
+  }
+
   loopCount_++;
   uint32_t now = HAL_GetTick();
-  if (static_cast<int32_t>(now - nextFullTick_) >= 0)
+  /* Once the NonSecure app has submitted at least one status via
+   * Comm_SendTelemetry(), Secure stops producing/pushing its own status on
+   * the periodic tick - submitExternalStatus() already sent it. Sensor
+   * collection itself moves to NonSecure in a later phase; for now this
+   * just avoids sending two competing status streams. */
+  if (!nsTelemetryActive && static_cast<int32_t>(now - nextFullTick_) >= 0)
   {
     nextFullTick_ += kFullPeriodMs;
     /* After a long stall (e.g. the 10 s blocking TCP accept) skip the
@@ -1096,16 +1201,22 @@ void Service::poll()
     uint32_t t0 = HAL_GetTick();
     collect(status_);
     uint32_t t1 = HAL_GetTick();
-    sendUart(status_);
+    if (telemetryEnabled)
+    {
+      sendUart(status_);
+    }
     uint32_t t2 = HAL_GetTick();
-    sendTcp(status_);
+    if (telemetryEnabled)
+    {
+      sendTcp(status_);
+    }
     profCollect += t1 - t0;
     profUart += t2 - t1;
     profTcp += HAL_GetTick() - t2;
     profFrames++;
   }
   profLoops++;
-  if (static_cast<int32_t>(now - nextBleTick_) >= 0)
+  if (telemetryEnabled && static_cast<int32_t>(now - nextBleTick_) >= 0)
   {
     nextBleTick_ += kBlePeriodMs;
     uint32_t t0 = HAL_GetTick();
@@ -1163,6 +1274,74 @@ void Service::poll()
 }
 
 } // namespace telemetry
+
+extern "C" void Comm_Init(void)
+{
+  telemetry::CommInit();
+}
+
+/* ---- CommBridge_*: extern "C" bridges for the Comm_* CMSE gateways
+ * (secure_nsc.c). Only ever receive Secure-local pointers (the gateways
+ * already validated/copied any NonSecure-origin data). ---- */
+extern "C" void CommBridge_Poll(void)
+{
+  if (telemetry::g_service != nullptr)
+  {
+    telemetry::g_service->poll();
+  }
+}
+
+extern "C" int CommBridge_SendTelemetry(const FullStatus_t *st)
+{
+  if (telemetry::g_service == nullptr)
+  {
+    return -2;
+  }
+  static_assert(sizeof(FullStatus_t) == sizeof(telemetry::FullStatus),
+               "FullStatus_t / telemetry::FullStatus must stay byte-identical");
+  telemetry::FullStatus local;
+  memcpy(&local, st, sizeof(local));
+  telemetry::g_service->submitExternalStatus(local);
+  return 0;
+}
+
+extern "C" int CommBridge_PollHostCommand(uint8_t *out)
+{
+  using namespace telemetry;
+  bool activity = nsActivity;
+  nsActivity = false;
+  if (nsCmdTail != nsCmdHead)
+  {
+    *out = nsCmdRing[nsCmdTail];
+    nsCmdTail = static_cast<uint8_t>((nsCmdTail + 1U) % sizeof(nsCmdRing));
+    return COMM_POLL_BYTE;
+  }
+  return activity ? COMM_POLL_ACTIVITY : COMM_POLL_NONE;
+}
+
+extern "C" void CommBridge_SetTelemetryEnabled(uint32_t on)
+{
+  telemetry::telemetryEnabled = (on != 0U);
+}
+
+extern "C" uint32_t CommBridge_GetLinkStatus(void)
+{
+  using namespace telemetry;
+  uint32_t bits = 0;
+  if (bleLinkOk)
+  {
+    bits |= (1U << 0);
+  }
+  if (bleConnected)
+  {
+    bits |= (1U << 2);
+  }
+  if (g_service != nullptr)
+  {
+    bits |= g_service->wifiTcpLinkBits();
+  }
+  return bits;
+}
 
 /* ---- Shared BSP audio callbacks (single definition for the whole app) ---- */
 extern "C" volatile uint32_t g_AudioEvents = 0; /* bit0 = half, bit1 = full */
