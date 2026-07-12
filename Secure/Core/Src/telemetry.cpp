@@ -385,8 +385,10 @@ void tcpCloseClient()
   }
 }
 
+} // namespace
+
 /* ADF1 kernel clock: CubeMX MspInit forces HCLK; restore the BSP's PLL3 */
-void reselectAudioPll3()
+static void reselectAudioPll3()
 {
   RCC_PeriphCLKInitTypeDef cfg = {};
   cfg.PLL3.PLL3Source = RCC_PLLSOURCE_MSI;
@@ -400,10 +402,12 @@ void reselectAudioPll3()
   cfg.Mdf1ClockSelection = RCC_MDF1CLKSOURCE_PLL3;
   (void)HAL_RCCEx_PeriphCLKConfig(&cfg);
 }
-} // namespace
 
 void Service::initAudio()
 {
+  /* Phase D revised: audio capture (MIC2/MDF1, DMA via PLL3) stays Secure.
+   * Only AI inference moved to NonSecure - it reads audioBuf through the
+   * Comm_GetAudioBuffer NSC gateway. */
   audioOk_ = false;
 
   static bool mxAdfReleased = false;
@@ -413,8 +417,6 @@ void Service::initAudio()
     mxAdfReleased = true;
   }
 
-  /* MIC2 (MDF1): the DMA-verified microphone path (MIC1/ADF1 only works in
-   * polling mode with TrustZone, see 開発状況記録) */
   BSP_AUDIO_Init_t init = {};
   init.Device = AUDIO_IN_DEVICE_DIGITAL_MIC2;
   init.SampleRate = CFG_AUDIO_SAMPLE_RATE;
@@ -660,9 +662,11 @@ void Service::collect(FullStatus &st)
   refreshSlowSensors(st);
   /* TrustZone Phase C: accelero/gyro/mag (ISM330DHCX/IIS2MDC, I2C1) moved
    * to NonSecure with the rest of the I2C sensors - Secure can no longer
-   * read them, NonSecure fills these FullStatus fields directly. */
-
-  /* Audio level from the live circular DMA buffer */
+   * read them, NonSecure overwrites these fields. Phase D: audio capture
+   * stays Secure, so audio_rms/peak/wave are computed here (but NonSecure's
+   * submitExternalStatus overwrites the whole struct - so these values only
+   * apply on the Secure-resident OTA-loader path; NonSecure fills its own
+   * audio fields via the Comm_GetAudioBuffer gateway). */
   if (audioOk_)
   {
     int64_t sqSum = 0;
@@ -1239,6 +1243,17 @@ extern "C" uint32_t CommBridge_GetLinkStatus(void)
     bits |= g_service->wifiTcpLinkBits();
   }
   return bits;
+}
+
+extern "C" uint32_t CommBridge_GetAudioBuffer(int16_t *dst, uint32_t maxSamples)
+{
+  /* dst is a Secure-local buffer here (the CMSE gateway validated the
+   * NonSecure origin). Copy the live mic capture window from the Secure
+   * audio DMA buffer. */
+  uint32_t n = (maxSamples < telemetry::kAudioSamples) ? maxSamples
+                                                       : telemetry::kAudioSamples;
+  memcpy(dst, telemetry::audioBuf, n * sizeof(int16_t));
+  return n;
 }
 
 /* ---- Shared BSP audio callbacks (single definition for the whole app) ---- */

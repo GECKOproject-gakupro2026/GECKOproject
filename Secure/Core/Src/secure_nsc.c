@@ -38,6 +38,7 @@ extern int CommBridge_SendTelemetry(const FullStatus_t *st);
 extern int CommBridge_PollHostCommand(uint8_t *out);
 extern void CommBridge_SetTelemetryEnabled(uint32_t on);
 extern uint32_t CommBridge_GetLinkStatus(void);
+extern uint32_t CommBridge_GetAudioBuffer(int16_t *dst, uint32_t maxSamples);
 /** @addtogroup STM32U5xx_HAL_Examples
 
   * @{
@@ -159,6 +160,21 @@ CMSE_NS_ENTRY void Comm_SetTelemetryEnabled(uint32_t on)
 CMSE_NS_ENTRY uint32_t Comm_GetLinkStatus(void)
 {
   return CommBridge_GetLinkStatus();
+}
+
+/**
+  * @brief  Copies the Secure mic capture window into a NonSecure buffer.
+  * @retval sample count copied, or 0 on bad pointer / audio not running
+  */
+CMSE_NS_ENTRY uint32_t Comm_GetAudioBuffer(int16_t *dst, uint32_t maxSamples)
+{
+  if (maxSamples == 0U ||
+      cmse_check_address_range(dst, maxSamples * sizeof(int16_t),
+                               CMSE_NONSECURE | CMSE_MPU_READWRITE) == NULL)
+  {
+    return 0U;
+  }
+  return CommBridge_GetAudioBuffer(dst, maxSamples);
 }
 
 /**

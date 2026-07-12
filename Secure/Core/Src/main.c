@@ -216,6 +216,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_UCPD1_Init();
   MX_USB_OTG_FS_PCD_Init();
+
   Comm_Init();
   /* USER CODE END 2 */
 
@@ -456,6 +457,10 @@ static void MX_GTZC_S_Init(void)
   {
     Error_Handler();
   }
+  /* Phase D revised: MDF1 (MIC2 audio capture, DMA-driven via PLL3 clock)
+   * STAYS Secure - moving its GPDMA/PLL3 chain to NonSecure proved fragile
+   * (DMA never transferred). Only AI inference moved to NonSecure, which
+   * reads the live mic window through the Comm_GetAudioBuffer NSC gateway. */
   if (HAL_GTZC_TZSC_ConfigPeriphAttributes(GTZC_PERIPH_MDF1, GTZC_TZSC_PERIPH_SEC|GTZC_TZSC_PERIPH_NPRIV) != HAL_OK)
   {
     Error_Handler();
@@ -1087,6 +1092,9 @@ static void MX_GPIO_Init(void)
    * fails even though the I2C bus itself works. */
   HAL_GPIO_ConfigPinAttributes(GPIOB, GPIO_PIN_8 | GPIO_PIN_9, GPIO_PIN_NSEC);
   HAL_GPIO_ConfigPinAttributes(GPIOH, GPIO_PIN_1 | GPIO_PIN_4 | GPIO_PIN_5, GPIO_PIN_NSEC);
+
+  /* Phase D revised: MIC2 (MDF1) pins stay Secure - audio capture stays
+   * Secure (see the MDF1 GTZC note above). */
 
   /*Configure GPIO pin : MIC_CCK1_Pin */
   GPIO_InitStruct.Pin = MIC_CCK1_Pin;

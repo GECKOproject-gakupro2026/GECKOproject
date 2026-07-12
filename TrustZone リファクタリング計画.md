@@ -227,3 +227,34 @@ NonSecure `App_Main` ループ（現 main.c:145-151 のLEDデモを置換）:
 - ToFセンサー（PH1修正後）: `tof_ok=1`、距離1750mm（手をかざして測定、妥当な値）
 - LED: 緑PH7が250ms間隔で正常点滅、NonSecureメインループが全センサー読み取りを含めて正常に周回
 - ボタン押下でOTAローダーに留まるケース（`App_Main()`実行）は`CommInit()`を再利用し`setNsDriven(false)`に戻す設計。今回のセッションでは未検証（通常の自動起動経路のみ確認）
+
+---
+
+## Phase D: 完了・実機検証済み（2026-07-12、設計を途中で見直し）
+
+### 当初計画と見直し
+
+当初は音声キャプチャ(MIC2/MDF1)もAI推論も両方NonSecureへ移す計画だったが、**音声キャプチャのNonSecure化はDMA転送が動かず断念**（初期化`s_audioOk=1`は成功するが、DMAが`s_audioBuf`に一切書き込まず全ゼロ。MDF1のPLL3クロックまたはGPDMAトリガーがTrustZone文脈で機能しない。GPDMA1_Ch0のチャネル属性をNSEC化しても解決せず）。
+
+**見直し後の構成**: 音声キャプチャ(MDF1+PLL3+GPDMA、既にSecureで安定動作)はSecureに残し、`Comm_GetAudioBuffer` NSCゲートウェイでNonSecureが生の音声窓を取得。NonSecureがRMS/peak/waveformを計算してテレメトリに含める。AI推論(Phase D-2)も同じゲートウェイで音声を取得する予定。
+
+### 実装内容
+
+- `Secure/Core/Src/main.c`: 一度NSEC化したMDF1/MICピン/GPDMA1_Ch0を全てSecureに戻した
+- `Secure/Core/Src/telemetry.cpp`: `initAudio()`(BSP_AUDIO_IN_Init/Record+reselectAudioPll3+DMA属性SEC設定)と`collect()`の音声RMS/peak/wave計算を復活
+- `Secure_nsclib/secure_nsc.h` / `secure_nsc.c`: `Comm_GetAudioBuffer(int16_t* dst, uint32_t maxSamples)`ゲートウェイ追加（`cmse_check_address_range`で検証後、Secure audioBufをコピー）
+- `NonSecure/Core/Src/ns_audio.c`: `Comm_GetAudioBuffer`でSecureから音声窓を取得→RMS/peak/wave計算に書き換え（BSPオーディオドライバ依存を除去）
+
+### ビルド構造で判明した最重要事実（今後HAL/BSPソースを足す度に必ず踏む）
+
+**NonSecure/Secureの`Drivers/STM32U5xx_HAL_Driver`は各HALソース`.c`を1つずつ`.project`の`<linkedResources>`に`<link>`で明示登録する構造**（CubeMXが`stm32u5xx_hal_conf.h`の有効モジュールから生成）。新HALモジュール(MDF等)を使うには①`hal_conf.h`で`#define HAL_XXX_MODULE_ENABLED` ②`.project`に`<link>`エントリ手動追加 ③`stm32cubeidec.exe ... -importAll "<repo>"`で再インポート、が必要。①だけだと`undefined reference to HAL_XXX_* / Unknown destination type (ARM/Thumb)`エラー。ヘッドレスビルド専用ワークスペースは`<scratchpad>/hws`でGUIワークスペースとは別物なので、GUIリフレッシュはhwsに反映されない。CLI完結には手動`.project`/`.cproject`編集+`-importAll`が正攻法。
+
+### 実機検証結果
+
+- 無音時: audio_rms=202, audio_peak=659（環境音、妥当なベースライン）
+- 発音時: max_rms=6569（無音時の約30倍）, max_peak=32763（int16フルスケール近く）→ マイクが正しく音を拾い、NonSecureがゲートウェイ経由で取得・計算していることを実証
+- 他センサー(温度37℃等)も並行して正常動作
+
+### 次フェーズへの申し送り
+
+- Phase D-2(AI推論のNonSecure化)は未着手。C++サポート追加とCubeAIライブラリ(`NetworkRuntime1020_CM33_GCC.a`)のNonSecureリンクが必要で、`.project`のlinked resources問題やC++ツール設定を考えると大掛かり。`Comm_GetAudioBuffer`ゲートウェイは既にあるのでAI側は音声取得済み

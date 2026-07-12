@@ -76,6 +76,13 @@ void Comm_SetTelemetryEnabled(uint32_t on);
  * connected, bit3 = TCP client connected */
 uint32_t Comm_GetLinkStatus(void);
 
+/* Copies the live microphone capture window (16 kHz mono int16, owned by the
+ * Secure audio DMA) into a NonSecure buffer. Returns the number of samples
+ * copied (<= maxSamples), or 0 if audio isn't running / the pointer is bad.
+ * NonSecure uses this for both the RMS/peak/waveform telemetry fields and
+ * the AI inference input - audio capture itself stays Secure (Phase D). */
+uint32_t Comm_GetAudioBuffer(int16_t *dst, uint32_t maxSamples);
+
 #endif /* SECURE_NSC_H */
 /* USER CODE END Non_Secure_CallLib_h */
 

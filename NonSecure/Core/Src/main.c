@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "secure_nsc.h"
 #include "sensors.h"
+#include "ns_audio.h"
 
 #include <string.h>
 /* USER CODE END Includes */
@@ -37,7 +38,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   12U
+#define NS_APP_VERSION   14U
 
 /* User LEDs on this board: LD6 red = PH6, LD7 green = PH7 */
 #define LED_RED_PIN      GPIO_PIN_6
@@ -135,6 +136,7 @@ static void led_show_version(uint32_t version)
 static void build_status(FullStatus_t *st)
 {
   Sensors_Refresh(st);
+  Audio_Refresh(st);
   st->ver = 2U;
   st->uptime_ms = HAL_GetTick();
   st->button = button_read();
@@ -173,6 +175,7 @@ int main(void)
   led_init();
   button_init();
   Sensors_Init();
+  Audio_Init();
   /* Publish the running version for the Secure side / host tools */
   *(volatile uint32_t *)NS_RUNNING_VERSION_ADDR = g_ns_appinfo.version;
   /* Startup reached the main loop without a fault: tell the Secure Stage-0
