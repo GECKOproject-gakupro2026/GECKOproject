@@ -330,19 +330,58 @@ NonSecureアプリ実行中にOTA FW_APPLYを受けると、Bank2消去でNonSec
 - ✅ **1回目のホットOTA適用(v16稼働中→再適用→ジャンプ)は成功**: バックアップ5.7秒完了、Bank2書き込み・CRC検証・ジャンプ後にICSR=正常(Thread mode)、NSAP version=16を確認。書き込み内容はSWD読み戻しとMD5完全一致で、**書き込み自体は元々完璧だった**(問題は書き込み中/ジャンプ時のフォルトとタイムアウト)。
 - ⚠️ **未解決: 連続2回目以降のホットOTA適用でジャンプ後HardFaultが残る**。v16が既に稼働している状態で立て続けにOTA→適用→ジャンプすると、2回目のジャンプ後にHardFault(ICSR VECTACTIVE=3)。アンダーリセット(`mode=UR -rst`)すれば正常起動に復帰する(Bank2イメージ自体は無傷)。通常のOTAフロー(Secureローダー状態→初回適用→初回ジャンプ)は成功するので実用上の主要ケースは動作するが、堅牢性のため**「OTA適用後は直接ジャンプせず`NVIC_SystemReset()`で再起動する」設計への変更を検討すべき**(業界標準のOTA適用パターン。どの状態からでもクリーンに起動できる)。
 
-### (6) LED状態と実行状態の対応付け（現行仕様、両LEDともSET=消灯/RESET=点灯）
+### (6) LED状態と実行状態の対応付け
 
-| 状態 | 緑LED(PH7) | 赤LED(PH6) | ToF LPn(PH1) | テレメトリ |
-|---|---|---|---|---|
-| ACTIVE | 250msでトグル(ハートビート) | 消灯 | HIGH(センサー動作) | 50Hz送信 |
-| IDLE(低消費) | 消灯 | 1秒でトグル(スロー点滅) | LOW(シャットダウン) | 停止 |
-| Secure OTAローダー | (Secure側LED制御) | - | - | Secureが送信(センサー値0) |
+→ **[UARTコマンド・LED状態リファレンス.md](UARTコマンド・LED状態リファレンス.md)** に独立ドキュメント化した（コマンド一覧・LED表・プロトコル仕様・SWDデバッグ手順）。
 
-SWDでの状態確認: GPIOH IDR = `0x42021C10`。ビット7=PH7(緑)、ビット6=PH6(赤)、ビット1=PH1(LPn)。値0=LOW。例: `0xB0`=赤点灯+LPn LOW(IDLE点灯相)、`0xF0`=両消灯+LPn LOW(IDLE消灯相)、`0x72`=ACTIVE。コアのフォルト状態はICSR=`0xE000ED04`のVECTACTIVE(下位9bit): 0=正常(Thread)、3=HardFault。
+### (4) プログラム内容と保存場所・メモリ管理の曖昧さ
 
-### 未対応・残タスク
+→ **[アーキテクチャ・メモリマップ.md](アーキテクチャ・メモリマップ.md)** に独立ドキュメント化した（Secure/NonSecureの分割理由、フラッシュ/RAM/NORのメモリマップ、ソースファイルの配置と役割、NSCゲートウェイ一覧、ペリフェラル割り当て、ビルド構造の注意点）。
 
-- **(1)原因C**: 連続ホットOTAのジャンプ後HardFault。`NVIC_SystemReset()`ベースの適用完了処理への変更を検討。
-- **(4) プログラム内容と保存場所・メモリ管理の曖昧さ**: 未着手。ソース配置(Secure=通信+OTA / NonSecure=センサー+音声取得+低消費/ HAL/BSPは両側に複製)とドキュメント体系の整理が必要。
-- **(5) UARTコマンドのmarkdown明示**: コンソールキー一覧(`t`=テスト, `a`/`s`=音声ストリーム, `i`/`I`=推論, `p`/`l`=TCP専用pong/LED)とOTAフレームコマンド(CMD 0x01〜0x08)の対応表を専用ドキュメント化する。
-- **(7) プログラムファイルの肥大化**: `telemetry.cpp`が1396行(通信3系統+OTA glue+MCU情報+音声が同居)。計画通り通信部を`comm_service.cpp`へ分割するリファクタが有効。Phase F(Secureデッドコード削除)と併せて実施予定。
+---
+
+## 追加バグ修正（2026-07-13、ユーザー報告「ACTIVE復帰後もToFがOFFのまま」から芋づる式に2件）
+
+### バグ①: IDLE→ACTIVE復帰でToFが復帰しない（実機検証PASS）
+
+**症状**: 復帰後 `tof_ok=True` なのに `tof_mm` が**1ミリも変化しない**（1674固定）。他のセンサー（照度など）は変動しているので、ToFだけ死んでいた。
+
+**根本原因の連鎖**:
+1. `Sensors_Resume()` が `BSP_RANGING_SENSOR_Init(0)` でフル再初期化を試みる
+2. しかし `VL53L5CX_Init()` は **`IsInitialized` フラグが立っていると `VL53L5CX_ERROR` を返して何もしない**（ドライバの仕様）
+3. → `s_tofOk = 0` になる
+4. → `Sensors_Refresh()` の `if (s_tofOk && ...)` が偽になり、**ToF読み取り分岐ごとスキップ**
+5. → 呼び出し側の `static FullStatus_t st` に**IDLE移行前の古い値が残り続ける** → 「動いているように見えて実は固定値」
+
+**試した修正と、なぜダメだったか**:
+- `Sensors_Stop()` で `BSP_RANGING_SENSOR_DeInit(0)` して `IsInitialized` をクリア → **ボードがUARTごと沈黙してIDLEから二度と戻らなくなった**。`BSP_RANGING_SENSOR_DeInit` → `BSP_I2C2_DeInit` → `HAL_GPIO_DeInit(PH4/PH5)` + I2C2クロック無効化 と、システムが立っているバス状態を崩しにいくため。
+
+**採用した修正**: LPnピンのハードシャットダウンをやめ、**VL53L5CX自身の `SetPowerMode(SLEEP/WAKEUP)`** を使う。これは純粋なI2Cレジスタ操作なので、GPIO・クロック・ドライバ状態のどれも壊さない。
+- `Sensors_Stop()`: `Stop()` + `SetPowerMode(SLEEP)` + `s_tofOk = 0`
+- `Sensors_Resume()`: `SetPowerMode(WAKEUP)` + `Start()`（再Init不要）
+
+**ついでに直した2つ**:
+- `Sensors_Refresh()` で `s_tofOk == 0` のとき **明示的に `tof_ok=0, tof_mm=0` を書く**（古い値が残って「生きているように見える」のを防ぐ）
+- 全センサーのスケジュールtickを `+= PERIOD` から **`= now + PERIOD` に変更**。IDLE中は `Refresh()` が呼ばれないので、累積方式だと期限が際限なく遅れ、復帰直後に毎ループ発火してセンサーを叩き続けていた。
+
+**実機検証**: 復帰後の `tof_mm` が 1679→1680→1681→1683→1682 と変動することを確認（修正前は固定値）。
+
+### バグ②: 一度IDLEに入ると二度とACTIVEに戻れない（実機検証PASS、最重要）
+
+**症状**: IDLEに入るとUARTが完全に沈黙し、keep-aliveを何バイト送っても復帰しない。赤LEDは点滅し続ける（＝NonSecureのループ自体は回っている）。「IDLEに一度も入らずACTIVEを維持し続ける」なら150フレーム受信できるので、**IDLEに入った瞬間に受信経路が死ぬ**という切り分けができた。
+
+**根本原因**: `Service::poll()` が `telemetryEnabled` に関係なく毎回 `pollTcp()` を呼んでいた。
+- `pollTcp()` はTCPクライアント未接続時、1Hzで `MX_WIFI_Socket_accept()` を呼び、これが**数百ms〜10秒ブロックする**
+- `pollTcp()` 内には「コンソールキーが来ていたらacceptより優先」というガードがあるが、これは `__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE)` を見ている。**コンソールRXはGPDMA循環DMA駆動なのでRXNEフラグは立たない**（DMAが即クリアする）→ ガードは機能していなかった
+- **IDLE中はNonSecureループにセンサー処理がなく超高速で回る**ため、`poll()` がこのブロッキングacceptに突っ込み続け、ウェイクのための `Console_GetChar()` がドレインされない
+
+**修正**: `poll()` で **`telemetryEnabled` が偽（＝IDLE中）なら `pollTcp()` をスキップ**する。IDLE中はTCPで配信すべきものが無いので実害はなく、コンソール/BLEのウェイク経路は生きたまま。
+
+**実機検証**: keep-alive停止→IDLE移行→keep-alive再開で381フレーム受信、正常復帰を確認（app.pyの実transport層でも検証）。
+
+---
+
+## 未対応・残タスク
+
+- **連続ホットOTAのジャンプ後HardFault**: `NVIC_SystemReset()` ベースの適用完了処理への変更（コード変更は用意したが未ビルド・未検証のため未適用）。通常のOTAフロー（Secureローダー状態→初回適用→初回ジャンプ）は成功する。
+- **プログラムファイルの肥大化**: `telemetry.cpp` が1414行（通信3系統+OTA glue+MCU情報+音声が同居）。通信部を `comm_service.cpp` へ分割するリファクタが有効。Phase F（Secureデッドコード削除）と併せて実施予定。

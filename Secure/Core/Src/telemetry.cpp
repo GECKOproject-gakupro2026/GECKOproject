@@ -1153,7 +1153,17 @@ void Service::poll()
     sendBle(status_);
     profBle += HAL_GetTick() - t0;
   }
+  if (telemetryEnabled)
   {
+    /* Skip the TCP service while the NS app is idle. pollTcp()'s 1 Hz
+     * MX_WIFI_Socket_accept() blocks for hundreds of ms with no client, and
+     * its "let a pending console key win" guard checks UART_FLAG_RXNE - which
+     * never sets, because console RX is DMA-driven and the DMA clears it. In
+     * IDLE the NS loop spins with no sensor work to slow it down, so poll()
+     * runs into that blocking accept constantly and the console byte that is
+     * supposed to wake the board never gets drained: the board could enter
+     * IDLE but never leave it. Idle means nothing to serve over TCP anyway;
+     * the console/BLE wake paths stay live. */
     uint32_t t0 = HAL_GetTick();
     pollTcp();
     profTcp += HAL_GetTick() - t0;

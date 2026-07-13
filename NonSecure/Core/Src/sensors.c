@@ -93,41 +93,55 @@ void Sensors_Init(void)
   s_nextTofTick = now;
 }
 
+/* Low-power mode: park the VL53L5CX in its own SLEEP power mode rather than
+ * cutting power via the LPn pin. Stop() alone only halts the ranging loop and
+ * leaves the module (and its emitter) powered, so it isn't enough; but the two
+ * hardware routes out of that are both dead ends here:
+ *   - LPn low = hardware shutdown. Coming back needs a full re-init, and
+ *     VL53L5CX_Init() refuses to run while the driver's IsInitialized flag is
+ *     set, so the re-init silently fails and ToF stays dead.
+ *   - DeInit first to clear that flag. But BSP_RANGING_SENSOR_DeInit ->
+ *     BSP_I2C2_DeInit -> HAL_GPIO_DeInit(PH4/PH5) + I2C2 clock disable tears
+ *     down bus state the rest of the system is still standing on: the board
+ *     went silent on UART (Secure comm stack dead) and never woke from IDLE.
+ * SetPowerMode(SLEEP/WAKEUP) is pure I2C register traffic - it stops the
+ * measurement and drops the sensor's draw without touching GPIO, clocks, or
+ * driver state, so resume is just WAKEUP + Start(). */
 void Sensors_Stop(void)
 {
-  /* Low-power mode (Phase E/F): BSP_RANGING_SENSOR_Stop() only issues an I2C
-   * stop-ranging command - the VL53L5CX module itself (and its activity LED)
-   * stays powered. Drive LPn (PH1) low to put the sensor in hardware
-   * shutdown, which actually cuts its power draw and the LED. */
-  if (s_tofOk)
+  if (!s_tofOk)
   {
-    (void)BSP_RANGING_SENSOR_Stop(0);
+    return;
   }
-  HAL_GPIO_WritePin(VL53L5A1_LP_PORT, VL53L5A1_LP_PIN, GPIO_PIN_RESET);
+  (void)BSP_RANGING_SENSOR_Stop(0);
+  (void)BSP_RANGING_SENSOR_SetPowerMode(0, RANGING_SENSOR_POWERMODE_SLEEP);
+  s_tofOk = 0U; /* Refresh() reports tof_ok=0 while asleep */
 }
 
 void Sensors_Resume(void)
 {
-  /* LPn low->high is a hardware reset (XSHUT release): the sensor reboots
-   * and needs a full re-init, not just Start(). Re-run BSP_RANGING_SENSOR_Init
-   * + the same profile/start sequence as Sensors_Init(). */
-  HAL_GPIO_WritePin(VL53L5A1_LP_PORT, VL53L5A1_LP_PIN, GPIO_PIN_SET);
-  HAL_Delay(2); /* VL53L5CX boot time after LPn release (datasheet: <=1.2 ms) */
-
-  tofInitAndStart();
-  if (!s_tofOk)
+  if (BSP_RANGING_SENSOR_SetPowerMode(0, RANGING_SENSOR_POWERMODE_WAKEUP) != BSP_ERROR_NONE ||
+      BSP_RANGING_SENSOR_Start(0, RS_MODE_ASYNC_CONTINUOUS) != BSP_ERROR_NONE)
   {
-    printf("[SENS] ToF re-init after resume failed\r\n");
+    printf("[SENS] ToF resume failed\r\n");
+    return;
   }
+  s_tofOk = 1U;
+  s_nextTofTick = HAL_GetTick();
 }
 
 void Sensors_Refresh(FullStatus_t *st)
 {
   uint32_t now = HAL_GetTick();
 
+  /* Note: all three schedules re-anchor on `now` rather than accumulating
+   * (`+= PERIOD`). Refresh doesn't run at all during IDLE, so an accumulating
+   * deadline falls arbitrarily far behind and then fires every loop until it
+   * catches up - hammering the sensors right after every wake. */
+
   if ((int32_t)(now - s_nextEnvTick) >= 0)
   {
-    s_nextEnvTick += SENSORS_ENV_PERIOD_MS;
+    s_nextEnvTick = now + SENSORS_ENV_PERIOD_MS;
     float f = 0.0f;
     if (BSP_ENV_SENSOR_GetValue(0, ENV_TEMPERATURE, &f) == BSP_ERROR_NONE)
     {
@@ -145,7 +159,7 @@ void Sensors_Refresh(FullStatus_t *st)
 
   if ((int32_t)(now - s_nextLightTick) >= 0)
   {
-    s_nextLightTick += SENSORS_LIGHT_PERIOD_MS;
+    s_nextLightTick = now + SENSORS_LIGHT_PERIOD_MS;
     uint32_t light[LIGHT_SENSOR_MAX_CHANNELS] = {0};
     if (BSP_LIGHT_SENSOR_GetValues(0, light) == BSP_ERROR_NONE)
     {
@@ -153,9 +167,17 @@ void Sensors_Refresh(FullStatus_t *st)
     }
   }
 
-  if (s_tofOk && (int32_t)(now - s_nextTofTick) >= 0)
+  if (!s_tofOk)
   {
-    s_nextTofTick += SENSORS_TOF_PERIOD_MS;
+    /* ToF down (shut down for IDLE, or re-init failed): say so instead of
+     * leaving the caller's static FullStatus holding the last good reading,
+     * which made a dead sensor look alive with a frozen distance. */
+    st->tof_ok = 0U;
+    st->tof_mm = 0U;
+  }
+  else if ((int32_t)(now - s_nextTofTick) >= 0)
+  {
+    s_nextTofTick = now + SENSORS_TOF_PERIOD_MS;
     static RANGING_SENSOR_Result_t result;
     if (BSP_RANGING_SENSOR_GetDistance(0, &result) == BSP_ERROR_NONE)
     {
