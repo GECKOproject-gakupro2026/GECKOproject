@@ -975,21 +975,24 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
       AckPayload ack = {cmd, seq, 0U};
       sendResponse(fromTcp, FRAME_CMD_ACK,
                    reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
-      HAL_Delay(300U);
-      printf("[OTA] launching NonSecure application at 0x08100000\r\n");
-      HAL_Delay(50U);
+      HAL_Delay(300U); /* let the ACK reach the host before the link drops */
       /* Freshly-applied image: don't inherit the previous image's failed
-       * boot count (OTA Phase 2 rollback guard, see boot_guard.hpp). */
+       * boot count (OTA Phase 2 rollback guard, see boot_guard.hpp). The
+       * reboot below re-enters Stage-0, which starts a fresh attempt count
+       * for the new image. */
       BootGuard_ConfirmBoot();
-      /* Bank2 was just erased+reprogrammed by applyToNonSecure(); ICACHE may
-       * still cache pre-erase lines for the NonSecure address range. Jumping
-       * without invalidating makes the CPU fetch stale/garbage instructions
-       * from the freshly-written vector table / Reset_Handler and HardFault -
-       * this only bit large images (v15/v16, ~139 KB) that touch far more
-       * cache lines than the tiny ones OTA was first proven with. A normal
-       * cold boot doesn't need this (Bank2 is untouched since last reset). */
-      (void)HAL_ICACHE_Invalidate();
-      Secure_JumpToNonSecure();
+      printf("[OTA] rebooting into the new NonSecure application...\r\n");
+      HAL_Delay(50U);
+      /* Reboot rather than jumping straight into the new image.
+       *
+       * Jumping (Secure_JumpToNonSecure) works from a clean loader state, but
+       * not when the NonSecure app was already running when the update landed:
+       * SCB_NS->VTOR, MSP_NS, the peripherals it had brought up and ICACHE all
+       * still describe the *previous* image, and a second hot apply HardFaults
+       * right after the jump. A system reset re-runs Stage-0 from scratch - it
+       * re-validates Bank2, re-initialises everything and enters the new image
+       * exactly as a cold boot would, from any prior state. */
+      NVIC_SystemReset(); /* does not return */
       break;
     }
     default:

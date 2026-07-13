@@ -381,7 +381,18 @@ NonSecureアプリ実行中にOTA FW_APPLYを受けると、Bank2消去でNonSec
 
 ---
 
+### バグ③: 連続ホットOTA適用でジャンプ後HardFault（実機検証PASS）
+
+**症状**: NonSecureアプリが稼働中に2回目のOTA適用をすると、ジャンプ直後にHardFault（ICSR VECTACTIVE=3）。1回目（Secureローダー状態から）は成功する。
+
+**原因**: FW_APPLY成功後に `Secure_JumpToNonSecure()` で新イメージへ**直接ジャンプ**していた。クリーンなローダー状態からの初回ジャンプなら成立するが、NonSecureアプリが既に走っている状態では `SCB_NS->VTOR`・`MSP_NS`・NSが立ち上げたペリフェラル・ICACHEがいずれも**前のイメージの状態**を保持したままで、ジャンプ直後にフォルトする。
+
+**修正**: **`NVIC_SystemReset()` で再起動する**。Stage-0が最初から走り直し、Bank2を再検証し、全ペリフェラルを初期化し直して、コールドブートと全く同じ経路で新イメージに入る。この種のMCUでOTAを締める標準的なやり方でもある。BootGuardのカウンタは適用直後に`ConfirmBoot`でクリアし、再起動後のStage-0が新イメージ用に新しい試行カウントを開始する。
+
+**実機検証**: 同一イメージを**連続2回ホット適用**し、両方とも `Bank2 programmed and verified; NonSecure application launched` で成功。再起動後もテレメトリ206フレーム/4秒、ToF値が変動、全センサー正常。
+
+---
+
 ## 未対応・残タスク
 
-- **連続ホットOTAのジャンプ後HardFault**: `NVIC_SystemReset()` ベースの適用完了処理への変更（コード変更は用意したが未ビルド・未検証のため未適用）。通常のOTAフロー（Secureローダー状態→初回適用→初回ジャンプ）は成功する。
 - **プログラムファイルの肥大化**: `telemetry.cpp` が1414行（通信3系統+OTA glue+MCU情報+音声が同居）。通信部を `comm_service.cpp` へ分割するリファクタが有効。Phase F（Secureデッドコード削除）と併せて実施予定。

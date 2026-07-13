@@ -81,7 +81,7 @@ CRC-16/CCITT-FALSE を SOF〜PAYLOAD にかける。
 | `0x05` | PC→board | FW_COMPLETE | size(u32 LE) + crc16(u16 LE) → NORのステージングを検証 |
 | `0x06` | PC→board | STATUS_REQ | なし（OTA状態を問い合わせ） |
 | `0x07` | board→PC | STATUS_RESP | `<BIIHB`: state/received/expected/crc16/last_error |
-| `0x08` | PC→board | FW_APPLY | なし（NOR→Bank2にコピーして起動） |
+| `0x08` | PC→board | FW_APPLY | なし（NOR→Bank2にコピーし、**システムリセットで新イメージを起動**） |
 | `0x7E` | board→PC | ACK | `<BBI`: orig_cmd/orig_seq/arg |
 | `0x7F` | board→PC | NACK | `<BBB`: orig_cmd/orig_seq/error |
 
@@ -161,4 +161,5 @@ $CLI -c port=SWD mode=HOTPLUG -r32 0x42021C10 1
 - **IDLE中はUARTが完全に無音**（テレメトリ停止）。「応答がない」と判断する前に、まず1バイト送ってACTIVEに戻す。
 - **音声ストリーミングの`a`/`s`は、NonSecureアプリ稼働中とOTAローダー中で通る経路が違う**（前者は`processRxByte`のPLAIN分岐、後者は`App_Main`のディスパッチ）。片方だけ直しても両方は動かない。
 - **OTA適用（FW_APPLY）は、Bank2に既存イメージがあると先にNORへバックアップを取る**ため数秒かかる（約5.7秒）。Bank2が空なら1.4秒程度。
+- **FW_APPLY成功後、ボードはシステムリセットして新イメージを起動する**（直接ジャンプではない）。ACKが返ってから再起動＋Wi-Fi/BLE初期化で**十数秒**かかるので、続けてコマンドを送る前に待つこと。
 - ボードのバージョンはNonSecureの`NS_APP_VERSION`（`NonSecure/Core/Src/main.c`）で、SWDでは`0x08100404`から読める。
