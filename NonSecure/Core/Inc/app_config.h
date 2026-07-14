@@ -25,4 +25,12 @@
  * app_loop.c) - only the slower rate distinguishes it from ACTIVE. */
 #define CFG_IDLE_TELEMETRY_MS     200U   /* 5 Hz */
 
+/* Trigger thresholds (see triggers.h). 0 = disabled (default): the sensor's
+ * baseline reading varies a lot by board placement/lighting/ambient noise,
+ * so ship with these off and let the integrator tune them for the target
+ * environment. st->light_raw / st->audio_rms are the fields compared
+ * against these. */
+#define CFG_TRIGGER_LIGHT_THRESHOLD   0U   /* raw light units, 0=disabled */
+#define CFG_TRIGGER_AUDIO_THRESHOLD   0     /* RMS units, 0=disabled */
+
 #endif /* APP_CONFIG_H */

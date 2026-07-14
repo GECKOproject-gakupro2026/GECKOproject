@@ -55,6 +55,9 @@ void App_Run(void)
   uint32_t nextLedTick = 0U;
   static FullStatus_t st; /* holds the latest snapshot for Trigger_Poll() too */
 
+  Trigger_SetLightThreshold(CFG_TRIGGER_LIGHT_THRESHOLD);
+  Trigger_SetAudioThreshold(CFG_TRIGGER_AUDIO_THRESHOLD);
+
   while (1)
   {
     Comm_Poll(); /* pumps the Secure comm service (TCP/OTA/BLE/audio) */
