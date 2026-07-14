@@ -1,9 +1,7 @@
 /**
   ******************************************************************************
   * @file    app_main.cpp
-  * @brief   Application entry: continuous status telemetry with an optional
-  *          on-demand hardware test run.
-  *          Console keys: 't' = run the full test suite once, then resume.
+  * @brief   Application entry: continuous status telemetry.
   ******************************************************************************
   */
 #include "ai_app.hpp"
@@ -16,8 +14,10 @@
 
 #include <cstdio>
 
-extern "C" volatile uint32_t g_LedBlinkEnable;
-extern "C" void App_RunTestsOnce(void);
+/* Run indicator toggle for SysTick_Handler's LD6/LD7 alternate blink
+ * (stm32u5xx_it.c). Was previously defined in test.cpp (removed); the
+ * definition belongs here since app_main.cpp is what actually drives it. */
+extern "C" volatile uint32_t g_LedBlinkEnable = 0;
 
 extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart4;
@@ -69,7 +69,7 @@ extern "C" void App_Main(void)
   printf("\r\n\r\n===== B-U585I-IOT02A status telemetry firmware =====\r\n");
   printf("SYSCLK=%lu Hz, build " __DATE__ " " __TIME__ "\r\n",
          HAL_RCC_GetSysClockFreq());
-  printf("console keys: 't'=tests  'a'/'s'=audio stream  'i'=infer once  'I'=auto infer\r\n");
+  printf("console keys: 'a'/'s'=audio stream  'i'=infer once  'I'=auto infer\r\n");
 
   /* Run indicator: LD6/LD7 blink alternately while the firmware is running */
   BSP_LED_Init(LED_RED);
@@ -118,15 +118,7 @@ extern "C" void App_Main(void)
       /* frame bytes (OTA & co.) are consumed inside; plain chars come back */
       key = service.processRxByte(static_cast<uint8_t>(key), false);
     }
-    if (key == 't' || key == 'T')
-    {
-      printf("\r\n[APP] pausing telemetry, running the hardware test suite...\r\n");
-      App_RunTestsOnce();
-      printf("[APP] test suite done, re-initializing telemetry...\r\n");
-      g_LedBlinkEnable = 1;
-      service.init();
-    }
-    else if (key == 'a' || key == 'A')
+    if (key == 'a' || key == 'A')
     {
       service.setAudioStream(true);
     }
