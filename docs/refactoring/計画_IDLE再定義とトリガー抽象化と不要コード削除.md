@@ -161,9 +161,10 @@ void Trigger_SetAudioThreshold(int16_t rms);   /* 音圧しきい値 */
 - 編集前に `.cproject` をscratchpadへ退避。編集後は必ず `-importAll` で両構成ビルド。
 
 ### P3-3. 未使用ドライバ削除（P3-1の後）
-- 削除対象: `Drivers/BSP/Components/aps6408`, `Drivers/BSP/Components/m24256`, `Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c`（テストのみ使用 → P3-1後に未使用）、`Drivers/BSP/Components/veml6030`（実使用は `veml3235`）。
-- `NonSecure/.cproject` の Drivers excluding には**既にこれらが記載済み**（`aps6408|m24256|...|veml6030`, `b_u585i_iot02a_eeprom.c`）。物理削除してもビルド影響なし。excluding文字列は残置でも無害。
-- 削除前に Grep で参照ゼロを確認（veml6030とveml3235の混同、eeprom、LPBAMシンボル）。
+- **実施結果（2026-07-14）**: `Drivers/BSP/Components/m24256` と `Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c/h` のみ削除。自己参照のみで完全に孤立していることを確認済み。
+- **`aps6408`/`veml6030` は削除を見送った**（計画時の想定が誤っていたことが実装確認で判明）:
+  - `aps6408`: `b_u585i_iot02a_ospi.c` が同一ファイル内でNOR（`ota.cpp`が使用中）とPSRAM（`APS6408_*`）の実装を混在させており、コンポーネント単体の削除はそのファイルの巻き添え削除を伴う。PSRAM自体は未使用だが、リスクに対して効果が小さく見送り。
+  - `veml6030`: `b_u585i_iot02a_light_sensor.c` の `BSP_LIGHT_SENSOR_Init` が VEML6030 を先にprobeし、失敗したら VEML3235 にフォールバックする設計（ボードリビジョン差異の吸収）。削除すると一部リビジョンで光センサーが動かなくなるリスクがあるため見送り。
 
 ### P3 検証（各サブステップ）
 `-importAll` 付きヘッドレスビルドで Secure+NonSecure Debug が0エラー → 書込み→verify全項目PASS → **ビルド時間・elfサイズの before/after を記録**（短縮効果の定量確認）。
