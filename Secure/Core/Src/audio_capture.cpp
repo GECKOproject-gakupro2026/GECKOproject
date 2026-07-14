@@ -27,6 +27,59 @@ namespace
 constexpr size_t kAudioSamples = 2048;   /* circular capture buffer */
 int16_t audioBuf[kAudioSamples];
 
+/* Pitch correction ratio for the MIC2/MDF1 capture path, calibrated
+ * empirically against on-target FFT sweeps
+ * (pc_side/mic_freq_response/sweep.py, 300Hz-4000Hz).
+ *
+ * The naive approach - measuring the effective sample rate from the pitch
+ * shift alone (~15682Hz vs nominal 16000Hz, ratio 0.9802) and using that
+ * ratio directly as the resample step - overcorrected: the DMA
+ * half/full-complete interrupt cadence (which is what actually paces
+ * FeedForResample() calls) runs about 4.5% faster than that ratio predicts,
+ * for reasons not fully root-caused (see
+ * docs/refactoring/計画_IDLE再定義とトリガー抽象化と不要コード削除.md 付録).
+ * kResampleStep = 1.0196 (> 1, i.e. output runs slightly slower than input -
+ * a mild downsample) was tuned directly against sweep.py output until the
+ * measured/input frequency ratio landed at 1.000 (0.9998-1.0000 across
+ * 300Hz-3000Hz, std-dev 0.01%). If the mic or its clocking changes, re-tune
+ * this constant the same way rather than trusting the naive derivation. */
+constexpr float kResampleStep = 1.0196f;
+
+/* Output queue for FeedForResample()/PopResampled(). Sized generously for
+ * either up- or down-sampling. */
+constexpr size_t kResampleQueueCap = 2048;
+int16_t resampleQueue[kResampleQueueCap];
+size_t resampleQueueHead = 0; /* next sample to pop */
+size_t resampleQueueTail = 0; /* next free slot to push */
+size_t resampleQueueCount = 0;
+
+/* Phase carried across successive FeedForResample() calls so the resampler
+ * treats the input as one continuous stream instead of restarting at
+ * pos=0 for every isolated 512-sample frame - a per-frame restart only
+ * consumes ~502 of each frame's 512 input samples, silently dropping ~10
+ * samples at every frame boundary (audible clicks, and it corrupted the
+ * FFT peak at anything above ~1kHz in on-target sweeps).
+ *
+ * Modelled as one virtual stream v[] = [prevLastSample, src[0], src[1], ...]
+ * per call, i.e. the previous call's final sample prepended to this call's
+ * src[]. resamplePhase is the fractional position into v[], always in
+ * [0, 1) at entry (so v[0]/v[1] - prevLastSample/src[0] - is the first
+ * interpolation pair). */
+float resamplePhase = 0.0f;
+int16_t resamplePrevLastSample = 0;
+bool resampleHavePrevSample = false;
+
+void queuePush(int16_t sample)
+{
+  if (resampleQueueCount >= kResampleQueueCap)
+  {
+    return; /* drop rather than overwrite unread data */
+  }
+  resampleQueue[resampleQueueTail] = sample;
+  resampleQueueTail = (resampleQueueTail + 1U) % kResampleQueueCap;
+  resampleQueueCount++;
+}
+
 /* ADF1 kernel clock: CubeMX MspInit forces HCLK; restore the BSP's PLL3 */
 void reselectAudioPll3()
 {
@@ -91,6 +144,75 @@ bool Init()
 const int16_t *Buffer() { return audioBuf; }
 
 uint32_t Samples() { return kAudioSamples; }
+
+void FeedForResample(const int16_t *src, uint32_t inCount)
+{
+  if (src == nullptr || inCount == 0U)
+  {
+    return;
+  }
+  /* Virtual stream v[] for this call: v[0] = previous call's last sample
+   * (or src[0] itself on the very first call, giving frac=0 there), then
+   * v[1..inCount] = src[0..inCount-1]. Sample count = inCount + 1. */
+  const int16_t firstV = resampleHavePrevSample ? resamplePrevLastSample : src[0];
+
+  auto vAt = [&](uint32_t vIdx) -> int16_t {
+    return (vIdx == 0U) ? firstV : src[vIdx - 1U];
+  };
+
+  /* pos in [0,1) at entry; walk it across v[], producing one interpolated
+   * output per kResampleStep advance, until the next output would need
+   * v[inCount+1] (one past what this call's virtual stream provides).
+   * The leftover phase (< kResampleStep, so < 1 sample either way) carries
+   * into the next call regardless of whether kResampleStep is above or
+   * below 1 (down- vs up-sampling). */
+  float pos = resamplePhase;
+  const uint32_t vCount = inCount + 1U;
+  for (;;)
+  {
+    uint32_t idx = static_cast<uint32_t>(pos);
+    if (idx + 1U >= vCount)
+    {
+      break; /* would need v[vCount]; stop and carry the phase forward */
+    }
+    float frac = pos - static_cast<float>(idx);
+    float a = static_cast<float>(vAt(idx));
+    float b = static_cast<float>(vAt(idx + 1U));
+    queuePush(static_cast<int16_t>(a + (b - a) * frac));
+    pos += kResampleStep;
+  }
+  /* Rebase the leftover phase onto the next call's virtual stream: pos
+   * currently indexes v[] = [prevLast, src[0..inCount-1]] (inCount+1
+   * samples); the next call's v[0] will be *this* call's src[inCount-1],
+   * which is v[inCount] here. So subtract inCount to rebase. */
+  resamplePhase = pos - static_cast<float>(inCount);
+  resamplePrevLastSample = src[inCount - 1U];
+  resampleHavePrevSample = true;
+}
+
+uint32_t ResampledAvailable()
+{
+  return static_cast<uint32_t>(resampleQueueCount);
+}
+
+void PopResampled(int16_t *dst, uint32_t outCount)
+{
+  if (dst == nullptr)
+  {
+    return;
+  }
+  for (uint32_t i = 0; i < outCount; i++)
+  {
+    if (resampleQueueCount == 0U)
+    {
+      dst[i] = 0; /* underrun guard; caller should check ResampledAvailable() first */
+      continue;
+    }
+    dst[i] = resampleQueue[resampleQueueHead];
+    resampleQueueHead = (resampleQueueHead + 1U) % kResampleQueueCap;
+    resampleQueueCount--;
+  }
+}
 
 } // namespace audio_capture
 

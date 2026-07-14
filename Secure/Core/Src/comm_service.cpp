@@ -601,7 +601,16 @@ void Service::poll()
     profStart = now;
   }
 
-  /* PCM streaming: forward each ready buffer half as two 512-sample frames */
+  /* PCM streaming: feed each ready buffer half into the pitch-correction
+   * queue, then drain it in 512-sample frames. Feeding (rather than
+   * resampling each 512-sample window in isolation) keeps the resampling
+   * phase continuous across window boundaries - see
+   * audio_capture::FeedForResample() for why that matters. The correction
+   * ratio (audio_capture::kResampleStep) was calibrated empirically against
+   * on-target FFT sweeps (pc_side/mic_freq_response/sweep.py), not derived
+   * from the nominal/measured sample-rate ratio: the DMA half/full-complete
+   * interrupt cadence runs measurably faster than that simple ratio would
+   * predict, for reasons not fully root-caused (see 計画_...md 付録). */
   if (audioStream_)
   {
     uint32_t events = g_AudioEvents;
@@ -611,18 +620,22 @@ void Service::poll()
       const int16_t *buf = audio_capture::Buffer();
       const int16_t *half =
           (events & 1U) != 0U ? &buf[0] : &buf[audio_capture::Samples() / 2];
-      for (int part = 0; part < 2; part++)
+      audio_capture::FeedForResample(half, 512U);
+      audio_capture::FeedForResample(half + 512, 512U);
+    }
+    while (audio_capture::ResampledAvailable() >= 512U)
+    {
+      static int16_t corrected[512];
+      audio_capture::PopResampled(corrected, 512U);
+      size_t len = Frame_Encode(
+          FRAME_CMD_AUDIO, audioSeq_++,
+          reinterpret_cast<const uint8_t *>(corrected), 1024U,
+          audioFrame, sizeof(audioFrame));
+      if (len > 0U)
       {
-        size_t len = Frame_Encode(
-            FRAME_CMD_AUDIO, audioSeq_++,
-            reinterpret_cast<const uint8_t *>(half + part * 512), 1024U,
-            audioFrame, sizeof(audioFrame));
-        if (len > 0U)
-        {
-          /* audio must not drop: wait for the in-flight frame (<= 12 ms) */
-          (void)comm_uart::SendAsync(audioFrame, len, 15);
-          comm_wifi::SendRaw(audioFrame, static_cast<int32_t>(len));
-        }
+        /* audio must not drop: wait for the in-flight frame (<= 12 ms) */
+        (void)comm_uart::SendAsync(audioFrame, len, 15);
+        comm_wifi::SendRaw(audioFrame, static_cast<int32_t>(len));
       }
     }
   }
