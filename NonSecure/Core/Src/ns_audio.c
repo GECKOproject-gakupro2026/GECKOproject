@@ -11,7 +11,7 @@
   */
 #include "main.h"
 #include "ns_audio.h"
-#include "secure_nsc.h"
+#include "comm_api.h"
 
 #include <math.h>
 

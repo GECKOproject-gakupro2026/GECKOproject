@@ -21,11 +21,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "secure_nsc.h"
+#include "app_loop.h"
 #include "board_io.h"
+#include "comm_api.h"
 #include "sensors.h"
 #include "ns_audio.h"
-#include "app_config.h"
 
 #include <string.h>
 /* USER CODE END Includes */
@@ -40,7 +40,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   19U
+#define NS_APP_VERSION   20U
 
 /* Version banner placed at a fixed offset so the Secure loader (and a host
  * tool) can read the staged/running NonSecure version without executing it.
@@ -77,19 +77,6 @@ static void MX_GTZC_NS_Init(void);
 __attribute__((section(".ns_appinfo"), used))
 const ns_appinfo_t g_ns_appinfo = {0x4E534150U, NS_APP_VERSION, {0U, 0U}};
 
-/* NonSecure is the application layer's main loop. It pumps the Secure comm
- * service via Comm_Poll() and submits a telemetry snapshot through the
- * Comm_SendTelemetry() NSC gateway. Phase C: env/motion/light/ToF sensors
- * (I2C1/I2C2) are now read here too; audio/AI/MCU-info fields stay zeroed
- * until Phase D/F. */
-static void build_status(FullStatus_t *st)
-{
-  Sensors_Refresh(st);
-  Audio_Refresh(st);
-  st->ver = 2U;
-  st->uptime_ms = HAL_GetTick();
-  st->button = Board_ButtonRead();
-}
 /* USER CODE END 0 */
 
 /**
@@ -132,85 +119,12 @@ int main(void)
   Secure_ConfirmBoot();
   /* USER CODE END 2 */
 
-  /* Infinite loop
-   * TrustZone Phase E: ACTIVE/IDLE low-power state machine. In ACTIVE the app
-   * reads sensors, streams 50 Hz telemetry and blinks the green heartbeat.
-   * After CFG_IDLE_TIMEOUT_MS with no host command it drops to IDLE: sensors
-   * and telemetry stop (Secure comm push is quieted too), ToF stops ranging,
-   * and the red LED slow-blinks. Any inbound host activity - which the Secure
-   * comm stack keeps listening for even in IDLE - wakes it back to ACTIVE. */
+  /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  enum { MODE_ACTIVE = 0, MODE_IDLE = 1 } mode = MODE_ACTIVE;
-  uint32_t lastActivityMs = HAL_GetTick(); /* start ACTIVE, not instantly idle */
-  uint32_t nextTelemetryTick = 0U;
-  uint32_t nextLedTick = 0U;
-  while (1)
-  {
-    /* USER CODE END WHILE */
+  App_Run(); /* does not return */
+  /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
-    Comm_Poll(); /* pumps the Secure comm service (TCP/OTA/BLE/audio) */
-
-    uint32_t now = HAL_GetTick();
-
-    /* Poll host input every loop (even in IDLE) - this is the wake source. */
-    uint8_t cmdByte = 0U;
-    if (Comm_PollHostCommand(&cmdByte) != COMM_POLL_NONE)
-    {
-      lastActivityMs = now; /* any inbound host traffic counts as activity */
-    }
-
-    if (mode == MODE_ACTIVE)
-    {
-      if ((int32_t)(now - lastActivityMs) >= (int32_t)CFG_IDLE_TIMEOUT_MS)
-      {
-        /* Enter IDLE: stop sensors/telemetry, quiet the Secure links. */
-        mode = MODE_IDLE;
-        Sensors_Stop();
-        Audio_Stop();
-        Comm_SetTelemetryEnabled(0U);
-        Board_LedGreenOff();
-        Board_LedRedOff();
-        nextLedTick = now;
-      }
-      else
-      {
-        if ((int32_t)(now - nextTelemetryTick) >= 0)
-        {
-          nextTelemetryTick = now + CFG_ACTIVE_TELEMETRY_MS;
-          static FullStatus_t st;
-          build_status(&st);
-          (void)Comm_SendTelemetry(&st);
-        }
-        if ((int32_t)(now - nextLedTick) >= 0)
-        {
-          nextLedTick = now + CFG_ACTIVE_HB_MS;
-          Board_LedRedOff();
-          Board_LedGreenToggle(); /* green heartbeat */
-        }
-      }
-    }
-    else /* MODE_IDLE */
-    {
-      if ((int32_t)(now - lastActivityMs) < (int32_t)CFG_IDLE_TIMEOUT_MS)
-      {
-        /* Woke on host activity: resume ACTIVE. */
-        mode = MODE_ACTIVE;
-        Sensors_Resume();
-        Audio_Resume();
-        Comm_SetTelemetryEnabled(1U);
-        Board_LedRedOff();
-        nextTelemetryTick = now;
-        nextLedTick = now;
-      }
-      else if ((int32_t)(now - nextLedTick) >= 0)
-      {
-        nextLedTick = now + CFG_IDLE_LED_BLINK_MS;
-        Board_LedGreenOff();
-        Board_LedRedToggle(); /* red slow blink = low-power indicator */
-      }
-    }
-  }
+  /* USER CODE BEGIN 3 */
   /* USER CODE END 3 */
 }
 
