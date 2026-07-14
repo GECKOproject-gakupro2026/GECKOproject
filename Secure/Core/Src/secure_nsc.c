@@ -23,22 +23,11 @@
 #include "main.h"
 #include "secure_nsc.h"
 
+#include "comm_backend.h"
+
 #include <arm_cmse.h>
 #include <string.h>
 
-/* Implemented in boot_guard.cpp (C++); confirmBoot() itself is C++-only
- * (namespaced), so this thin extern "C" wrapper is what secure_nsc.c calls. */
-extern void BootGuard_ConfirmBoot(void);
-
-/* Implemented in telemetry.cpp (C++ comm service); these extern "C" bridges
- * only ever receive Secure-local pointers - the CMSE gateways below validate
- * and copy NonSecure buffers before calling them. */
-extern void CommBridge_Poll(void);
-extern int CommBridge_SendTelemetry(const FullStatus_t *st);
-extern int CommBridge_PollHostCommand(uint8_t *out);
-extern void CommBridge_SetTelemetryEnabled(uint32_t on);
-extern uint32_t CommBridge_GetLinkStatus(void);
-extern uint32_t CommBridge_GetAudioBuffer(int16_t *dst, uint32_t maxSamples);
 /** @addtogroup STM32U5xx_HAL_Examples
 
   * @{

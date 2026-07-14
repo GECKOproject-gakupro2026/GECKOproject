@@ -19,6 +19,7 @@
 #include "telemetry.hpp"
 
 #include "app_config.h"
+#include "comm_backend.h"
 #include "comm_dto.h"
 #include "console.h"
 #include "frame_codec.h"
