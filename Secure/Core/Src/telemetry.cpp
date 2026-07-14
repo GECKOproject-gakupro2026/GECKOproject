@@ -14,13 +14,14 @@
 #include "ota.hpp"
 
 #include "b_u585i_iot02a.h"
-#include "b_u585i_iot02a_audio.h"
 #include "b_u585i_iot02a_env_sensors.h"
 #include "b_u585i_iot02a_light_sensor.h"
 #include "b_u585i_iot02a_motion_sensors.h"
 #include "b_u585i_iot02a_ranging_sensor.h"
 
+#include "audio_capture.hpp"
 #include "comm_ble.hpp"
+#include "comm_uart.hpp"
 #include "comm_wifi.hpp"
 
 #include <cmath>
@@ -32,10 +33,7 @@ extern UART_HandleTypeDef huart1; /* VCP console / telemetry stream */
 extern "C" void Secure_JumpToNonSecure(void);
 extern "C" void BootGuard_ConfirmBoot(void); /* boot_guard.cpp, OTA Phase 2 */
 
-/* CubeMX-generated ADF1 handle (main.c), released before the BSP takes over */
-extern "C" MDF_HandleTypeDef AdfHandle0;
-
-/* Shared BSP audio DMA event flags (defined at the end of this file) */
+/* Shared BSP audio DMA event flags (defined in audio_capture.cpp) */
 extern "C" volatile uint32_t g_AudioEvents;
 extern "C" volatile uint32_t g_AudioErrors;
 
@@ -78,55 +76,8 @@ uint32_t adcReadChannel(uint32_t channel)
   (void)HAL_ADC_Stop(&hadcMcu);
   return v;
 }
-constexpr size_t kAudioSamples = 2048;   /* circular capture buffer */
 
-int16_t audioBuf[kAudioSamples];
-
-} // namespace (reopened below)
-} // namespace telemetry
-
-/* Live microphone window for the AI inference path (C linkage) */
-extern "C" const int16_t *Telemetry_GetAudioBuffer(uint32_t *count)
-{
-  *count = telemetry::kAudioSamples;
-  return telemetry::audioBuf;
-}
-
-namespace telemetry
-{
-namespace
-{
 uint8_t audioFrame[1024 + FRAME_OVERHEAD]; /* PCM streaming TX buffer */
-
-/* --- Non-blocking VCP transmit (interrupt driven, single in-flight buffer).
- * Status frames are droppable (next one comes in 20 ms); audio frames spin
- * briefly for the previous transfer instead. --- */
-volatile bool uartTxBusy = false;
-uint8_t uartTxBuf[1024 + FRAME_OVERHEAD];
-
-bool uartSendAsync(const uint8_t *data, size_t len, uint32_t waitMs)
-{
-  uint32_t t0 = HAL_GetTick();
-  while (uartTxBusy)
-  {
-    if (HAL_GetTick() - t0 >= waitMs)
-    {
-      return false;
-    }
-  }
-  if (len > sizeof(uartTxBuf))
-  {
-    return false;
-  }
-  memcpy(uartTxBuf, data, len);
-  uartTxBusy = true;
-  if (HAL_UART_Transmit_IT(&huart1, uartTxBuf, static_cast<uint16_t>(len)) != HAL_OK)
-  {
-    uartTxBusy = false;
-    return false;
-  }
-  return true;
-}
 
 /* OTA staging + per-link inbound frame decoders */
 ota::Manager otaMgr;
@@ -160,64 +111,6 @@ void nsCmdPush(uint8_t byte)
 
 } // namespace
 
-/* ADF1 kernel clock: CubeMX MspInit forces HCLK; restore the BSP's PLL3 */
-static void reselectAudioPll3()
-{
-  RCC_PeriphCLKInitTypeDef cfg = {};
-  cfg.PLL3.PLL3Source = RCC_PLLSOURCE_MSI;
-  cfg.PLL3.PLL3M = 1;
-  cfg.PLL3.PLL3N = 80;
-  cfg.PLL3.PLL3P = 28;
-  cfg.PLL3.PLL3Q = 28;
-  cfg.PLL3.PLL3R = 2;
-  cfg.PLL3.PLL3ClockOut = RCC_PLL3_DIVQ;
-  cfg.PeriphClockSelection = RCC_PERIPHCLK_MDF1;
-  cfg.Mdf1ClockSelection = RCC_MDF1CLKSOURCE_PLL3;
-  (void)HAL_RCCEx_PeriphCLKConfig(&cfg);
-}
-
-void Service::initAudio()
-{
-  /* Phase D revised: audio capture (MIC2/MDF1, DMA via PLL3) stays Secure.
-   * Only AI inference moved to NonSecure - it reads audioBuf through the
-   * Comm_GetAudioBuffer NSC gateway. */
-  audioOk_ = false;
-
-  static bool mxAdfReleased = false;
-  if (!mxAdfReleased)
-  {
-    HAL_MDF_DeInit(&AdfHandle0);
-    mxAdfReleased = true;
-  }
-
-  BSP_AUDIO_Init_t init = {};
-  init.Device = AUDIO_IN_DEVICE_DIGITAL_MIC2;
-  init.SampleRate = CFG_AUDIO_SAMPLE_RATE;
-  init.BitsPerSample = AUDIO_RESOLUTION_16B;
-  init.ChannelsNbr = 1;
-  init.Volume = 100;
-  if (BSP_AUDIO_IN_Init(0, &init) != BSP_ERROR_NONE)
-  {
-    printf("[TLM] audio init failed\r\n");
-    return;
-  }
-  reselectAudioPll3();
-
-  /* TrustZone: secure+privileged DMA channel, secure source/destination */
-  (void)HAL_DMA_ConfigChannelAttributes(
-      &haudio_mdf[1],
-      DMA_CHANNEL_SEC | DMA_CHANNEL_PRIV | DMA_CHANNEL_SRC_SEC | DMA_CHANNEL_DEST_SEC);
-
-  if (BSP_AUDIO_IN_Record(0, reinterpret_cast<uint8_t *>(audioBuf),
-                          sizeof(audioBuf)) != BSP_ERROR_NONE)
-  {
-    printf("[TLM] audio record start failed\r\n");
-    BSP_AUDIO_IN_DeInit(0);
-    return;
-  }
-  audioOk_ = true;
-}
-
 void Service::initSensors()
 {
   /* TrustZone Phase C: ToF/env/motion/light sensors and their I2C1/I2C2
@@ -250,7 +143,7 @@ void Service::init()
 
   printf("[TLM] initializing telemetry sources...\r\n");
   initSensors();
-  initAudio();
+  audioOk_ = audio_capture::Init();
   initMcuInfo();
   initRadio();
   uint32_t now = HAL_GetTick();
@@ -394,6 +287,8 @@ void Service::collect(FullStatus &st)
    * audio fields via the Comm_GetAudioBuffer gateway). */
   if (audioOk_)
   {
+    const int16_t *audioBuf = audio_capture::Buffer();
+    const size_t kAudioSamples = audio_capture::Samples();
     int64_t sqSum = 0;
     int32_t peak = 0;
     int32_t sum = 0;
@@ -412,7 +307,7 @@ void Service::collect(FullStatus &st)
     st.audio_rms = static_cast<int16_t>(
         sqrtf(static_cast<float>(sqSum) / static_cast<float>(kAudioSamples)));
     st.audio_peak = static_cast<int16_t>(peak);
-    constexpr size_t stride = kAudioSamples / 32U;
+    const size_t stride = kAudioSamples / 32U;
     for (size_t i = 0; i < 32U; i++)
     {
       st.wave[i] = static_cast<int16_t>(audioBuf[i * stride] - mean);
@@ -431,7 +326,7 @@ void Service::sendUart(const FullStatus &st)
   if (len > 0U)
   {
     /* drop the frame when the previous one is still in flight */
-    (void)uartSendAsync(frame, len, 0);
+    (void)comm_uart::SendAsync(frame, len, 0);
   }
 }
 
@@ -515,7 +410,7 @@ void Service::sendResponse(bool fromTcp, uint8_t cmd, const uint8_t *payload,
   }
   else
   {
-    (void)uartSendAsync(frame, n, 20);
+    (void)comm_uart::SendAsync(frame, n, 20);
   }
 }
 
@@ -798,8 +693,9 @@ void Service::poll()
     if (events != 0U)
     {
       g_AudioEvents = 0;
+      const int16_t *buf = audio_capture::Buffer();
       const int16_t *half =
-          (events & 1U) != 0U ? &audioBuf[0] : &audioBuf[kAudioSamples / 2];
+          (events & 1U) != 0U ? &buf[0] : &buf[audio_capture::Samples() / 2];
       for (int part = 0; part < 2; part++)
       {
         size_t len = Frame_Encode(
@@ -809,7 +705,7 @@ void Service::poll()
         if (len > 0U)
         {
           /* audio must not drop: wait for the in-flight frame (<= 12 ms) */
-          (void)uartSendAsync(audioFrame, len, 15);
+          (void)comm_uart::SendAsync(audioFrame, len, 15);
           comm_wifi::SendRaw(audioFrame, static_cast<int32_t>(len));
         }
       }
@@ -892,38 +788,9 @@ extern "C" uint32_t CommBridge_GetAudioBuffer(int16_t *dst, uint32_t maxSamples)
   /* dst is a Secure-local buffer here (the CMSE gateway validated the
    * NonSecure origin). Copy the live mic capture window from the Secure
    * audio DMA buffer. */
-  uint32_t n = (maxSamples < telemetry::kAudioSamples) ? maxSamples
-                                                       : telemetry::kAudioSamples;
-  memcpy(dst, telemetry::audioBuf, n * sizeof(int16_t));
+  uint32_t total = audio_capture::Samples();
+  uint32_t n = (maxSamples < total) ? maxSamples : total;
+  memcpy(dst, audio_capture::Buffer(), n * sizeof(int16_t));
   return n;
 }
 
-/* ---- Shared BSP audio callbacks (single definition for the whole app) ---- */
-extern "C" volatile uint32_t g_AudioEvents = 0; /* bit0 = half, bit1 = full */
-extern "C" volatile uint32_t g_AudioErrors = 0;
-
-extern "C" void BSP_AUDIO_IN_HalfTransfer_CallBack(uint32_t Instance)
-{
-  (void)Instance;
-  g_AudioEvents |= 1U;
-}
-
-extern "C" void BSP_AUDIO_IN_TransferComplete_CallBack(uint32_t Instance)
-{
-  (void)Instance;
-  g_AudioEvents |= 2U;
-}
-
-extern "C" void BSP_AUDIO_IN_Error_CallBack(uint32_t Instance)
-{
-  (void)Instance;
-  g_AudioErrors = g_AudioErrors + 1U;
-}
-
-extern "C" void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-  if (huart->Instance == USART1)
-  {
-    telemetry::uartTxBusy = false;
-  }
-}

@@ -118,7 +118,6 @@ private:
   void sendResponse(bool fromTcp, uint8_t cmd, const uint8_t *payload,
                     uint16_t len);
   void initSensors();
-  void initAudio();
   void initRadio();
   void initMcuInfo();
   void collect(FullStatus &st);
