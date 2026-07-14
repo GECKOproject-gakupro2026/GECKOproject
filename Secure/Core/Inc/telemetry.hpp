@@ -125,7 +125,6 @@ private:
   void refreshSlowSensors(FullStatus &st);
   void refreshMcuInfo(FullStatus &st);
   void sendUart(const FullStatus &st);
-  void sendBle(const FullStatus &st);
   void sendTcp(const FullStatus &st);
   void pollTcp();
 
@@ -140,7 +139,6 @@ private:
   uint32_t loopWindowStart_ = 0;
   uint32_t loopMax_ = 0;
   uint8_t uartSeq_ = 0;
-  uint8_t bleSeq_ = 0;
   uint8_t audioSeq_ = 0;
   uint8_t tcpSeq_ = 0;
   bool sensorsOk_ = false;
