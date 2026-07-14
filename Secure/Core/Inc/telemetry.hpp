@@ -119,7 +119,6 @@ private:
                     uint16_t len);
   void initSensors();
   void initRadio();
-  void initMcuInfo();
   void collect(FullStatus &st);
   void refreshSlowSensors(FullStatus &st);
   void refreshMcuInfo(FullStatus &st);
