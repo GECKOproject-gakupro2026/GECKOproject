@@ -21,4 +21,8 @@
 #define CFG_ACTIVE_HB_MS          250U
 #define CFG_ACTIVE_TELEMETRY_MS    20U   /* 50 Hz */
 
+/* IDLE telemetry cadence. IDLE no longer silences the comm stack (see
+ * app_loop.c) - only the slower rate distinguishes it from ACTIVE. */
+#define CFG_IDLE_TELEMETRY_MS     200U   /* 5 Hz */
+
 #endif /* APP_CONFIG_H */

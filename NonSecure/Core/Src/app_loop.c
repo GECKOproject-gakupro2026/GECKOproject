@@ -23,9 +23,9 @@
 
 /* NonSecure is the application layer's main loop. It pumps the Secure comm
  * service via Comm_Poll() and submits a telemetry snapshot through the
- * Comm_SendTelemetry() NSC gateway. Phase C: env/motion/light/ToF sensors
- * (I2C1/I2C2) are now read here too; audio/AI/MCU-info fields stay zeroed
- * until Phase D/F. */
+ * Comm_SendTelemetry() NSC gateway. env/motion/light/ToF sensors (I2C1/I2C2)
+ * and audio (RMS/waveform, read from the Secure capture buffer) are read
+ * here on every call, in both ACTIVE and IDLE. */
 static void build_status(FullStatus_t *st)
 {
   Sensors_Refresh(st);
@@ -35,12 +35,17 @@ static void build_status(FullStatus_t *st)
   st->button = Board_ButtonRead();
 }
 
-/* TrustZone Phase E: ACTIVE/IDLE low-power state machine. In ACTIVE the app
- * reads sensors, streams 50 Hz telemetry and blinks the green heartbeat.
- * After CFG_IDLE_TIMEOUT_MS with no host command it drops to IDLE: sensors
- * and telemetry stop (Secure comm push is quieted too), ToF stops ranging,
- * and the red LED slow-blinks. Any inbound host activity - which the Secure
- * comm stack keeps listening for even in IDLE - wakes it back to ACTIVE. */
+/* ACTIVE/IDLE state machine, redefined around "IDLE = waiting for a
+ * trigger" rather than "IDLE = shut everything down". Only ToF (the one
+ * sensor with meaningful power draw) is put to sleep in IDLE; telemetry,
+ * BLE and TCP stay live at a slower cadence so the comm stack never goes
+ * quiet. This matters: quieting the comm stack via
+ * Comm_SetTelemetryEnabled(0) used to also skip Service::pollTcp() on the
+ * Secure side, and pollTcp()'s blocking MX_WIFI_Socket_accept() (hundreds
+ * of ms to ~10s with no client) then starved Console_GetChar() of CPU time
+ * to drain the wake byte - the board could enter IDLE but never leave it
+ * (see docs/refactoring/既知の問題_IDLE復帰の間欠的不安定性.md). Never calling
+ * Comm_SetTelemetryEnabled(0) removes that failure mode entirely. */
 void App_Run(void)
 {
   enum { MODE_ACTIVE = 0, MODE_IDLE = 1 } mode = MODE_ACTIVE;
@@ -65,41 +70,29 @@ void App_Run(void)
     {
       if ((int32_t)(now - lastActivityMs) >= (int32_t)CFG_IDLE_TIMEOUT_MS)
       {
-        /* Enter IDLE: stop sensors/telemetry, quiet the Secure links. */
+        /* Enter IDLE: only ToF (the power-hungry sensor) sleeps. Telemetry,
+         * BLE and TCP keep running at the slower IDLE cadence below. */
         mode = MODE_IDLE;
         Sensors_Stop();
-        Audio_Stop();
-        Comm_SetTelemetryEnabled(0U);
         Board_LedGreenOff();
         Board_LedRedOff();
         nextLedTick = now;
+        nextTelemetryTick = now;
       }
-      else
+      else if ((int32_t)(now - nextLedTick) >= 0)
       {
-        if ((int32_t)(now - nextTelemetryTick) >= 0)
-        {
-          nextTelemetryTick = now + CFG_ACTIVE_TELEMETRY_MS;
-          static FullStatus_t st;
-          build_status(&st);
-          (void)Comm_SendTelemetry(&st);
-        }
-        if ((int32_t)(now - nextLedTick) >= 0)
-        {
-          nextLedTick = now + CFG_ACTIVE_HB_MS;
-          Board_LedRedOff();
-          Board_LedGreenToggle(); /* green heartbeat */
-        }
+        nextLedTick = now + CFG_ACTIVE_HB_MS;
+        Board_LedRedOff();
+        Board_LedGreenToggle(); /* green heartbeat */
       }
     }
     else /* MODE_IDLE */
     {
       if ((int32_t)(now - lastActivityMs) < (int32_t)CFG_IDLE_TIMEOUT_MS)
       {
-        /* Woke on host activity: resume ACTIVE. */
+        /* Woke on host activity: resume ToF ranging. */
         mode = MODE_ACTIVE;
         Sensors_Resume();
-        Audio_Resume();
-        Comm_SetTelemetryEnabled(1U);
         Board_LedRedOff();
         nextTelemetryTick = now;
         nextLedTick = now;
@@ -110,6 +103,18 @@ void App_Run(void)
         Board_LedGreenOff();
         Board_LedRedToggle(); /* red slow blink = low-power indicator */
       }
+    }
+
+    /* Telemetry runs in both modes now, just at different cadences
+     * (CFG_ACTIVE_TELEMETRY_MS vs CFG_IDLE_TELEMETRY_MS). */
+    uint32_t telemetryPeriodMs =
+        (mode == MODE_ACTIVE) ? CFG_ACTIVE_TELEMETRY_MS : CFG_IDLE_TELEMETRY_MS;
+    if ((int32_t)(now - nextTelemetryTick) >= 0)
+    {
+      nextTelemetryTick = now + telemetryPeriodMs;
+      static FullStatus_t st;
+      build_status(&st);
+      (void)Comm_SendTelemetry(&st);
     }
   }
 }

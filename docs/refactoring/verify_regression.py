@@ -1,4 +1,4 @@
-"""リファクタリング回帰検証スクリプト（全ステップ共通）
+"""回帰検証スクリプト
 
 使い方:
     cd <REPO>
@@ -9,8 +9,15 @@
     - リセットから12秒以上経過している（Wi-Fi/BLE初期化の完了待ち）
     - ST-LINK VCPがCOM9に見えている（違う場合は下の PORT を書き換える）
 
-最後に PASS / FAIL を印字する。1つでもFAILなら、そのステップの変更は
-実機で壊れているので、コミットせずロールバックすること。
+最後に PASS / FAIL を印字する。1つでもFAILなら、その変更は実機で壊れて
+いるので、コミットせずロールバックすること。
+
+IDLE判定について(P1でIDLE再定義に合わせて改訂):
+    IDLE状態は「トリガー待機状態」であり、通信は沈黙させない。電力を食う
+    ToFだけSLEEPさせ、テレメトリ/BLE/TCPは低頻度で流し続ける設計。
+    そのためIDLE遷移の判定は「フレームが止まる」ではなく「通信は継続し
+    つつToFがSLEEPしている(tof_ok=0)」、IDLE復帰の判定は「フレーム再開」
+    に加えて「ToFが再びranging中(tof_ok=1)」を見る。
 """
 from __future__ import annotations
 
@@ -36,12 +43,14 @@ def check(name: str, ok: bool, detail: str) -> None:
 
 def collect(ser, parser, secs: float, keepalive: bool):
     """secs秒間受信する。keepaliveがTrueなら1秒ごとに\\x00を送る。
-    戻り値: (statusフレーム数, audioフレーム数, 最後のStatus, tof_mmの異なり数)"""
+    戻り値: (statusフレーム数, audioフレーム数, 最後のStatus, tof_mmの異なり数,
+             tof_okがTrueだったフレーム数, tof_okがFalseだったフレーム数)"""
     t_end = time.time() + secs
     next_ka = time.time()
     n_status = n_audio = 0
     last = None
     tofs: list[int] = []
+    tof_ok_count = tof_dead_count = 0
     while time.time() < t_end:
         if keepalive and time.time() >= next_ka:
             ser.write(b"\x00")
@@ -58,8 +67,12 @@ def collect(ser, parser, secs: float, keepalive: bool):
                 last = st
                 if not tofs or tofs[-1] != st.tof_mm:
                     tofs.append(st.tof_mm)
+                if st.tof_ok:
+                    tof_ok_count += 1
+                else:
+                    tof_dead_count += 1
         time.sleep(0.02)
-    return n_status, n_audio, last, len(tofs)
+    return n_status, n_audio, last, len(tofs), tof_ok_count, tof_dead_count
 
 
 def main() -> int:
@@ -67,7 +80,7 @@ def main() -> int:
     with serial.Serial(PORT, BAUD, timeout=0.2) as ser:
         # 1) ACTIVE維持 + センサー生存
         print("1) ACTIVE維持とセンサー(5秒、keep-alive送信)")
-        n_st, _, last, n_tof = collect(ser, parser, 5.0, keepalive=True)
+        n_st, _, last, n_tof, _, _ = collect(ser, parser, 5.0, keepalive=True)
         check("ACTIVE維持", n_st >= 150, f"{n_st}フレーム受信 (要 >=150)")
         if last is not None:
             check("ToF生存", n_tof >= 2,
@@ -79,27 +92,36 @@ def main() -> int:
             check("温度センサー", False, "Statusフレームが1つも来ない")
 
         # 2) IDLE遷移
-        print("2) IDLE遷移(5秒間 keep-alive停止)")
-        n_st, _, _, _ = collect(ser, parser, 5.0, keepalive=False)
-        # 最初の3秒はACTIVEなのでフレームが来る。後半2秒で止まるのを見たいので
-        # 追加で2秒、完全に無通信で観測する
-        n_idle, _, _, _ = collect(ser, parser, 2.0, keepalive=False)
-        check("IDLE遷移", n_idle == 0,
-              f"無通信2秒後に{n_idle}フレーム (要 0。0でない=IDLEに入っていない)")
+        # IDLEはもはや通信を沈黙させない(ToFのみSLEEPし、通信は生かしたまま
+        # トリガーを待つ)。よって判定は「フレームが止まる」ではなく
+        # 「通信は継続しつつToFがSLEEPしている(tof_ok=0)」に変わる。
+        print("2) IDLE遷移(5秒間 keep-alive停止、IDLE中もテレメトリは継続)")
+        n_st, _, _, _, _, _ = collect(ser, parser, 5.0, keepalive=False)
+        # 最初の3秒はACTIVEなのでフレームが来る。IDLE突入後の状態を見たいので
+        # 追加で2秒、無通信のまま観測する(IDLE中もkeep-alive無しでテレメトリは来る)
+        n_idle, _, _, _, tof_ok_n, tof_dead_n = collect(
+            ser, parser, 2.0, keepalive=False)
+        check("IDLE遷移(通信継続)", n_idle > 0,
+              f"無通信2秒後も{n_idle}フレーム受信 (要 >0。IDLE中も通信は生存する設計)")
+        check("IDLE遷移(ToF SLEEP)", tof_dead_n > 0 and tof_ok_n == 0,
+              f"tof_ok=True:{tof_ok_n}件 / False:{tof_dead_n}件 "
+              f"(要 全てFalse。IDLE中はToFがSLEEPしtof_ok=0のはず)")
 
         # 3) IDLE復帰
         print("3) IDLE復帰(8秒、keep-alive再開)")
-        n_st, _, _, _ = collect(ser, parser, 8.0, keepalive=True)
-        check("IDLE復帰", n_st >= 100, f"{n_st}フレーム受信 (要 >=100)")
+        n_st, _, _, _, tof_ok_n, _ = collect(ser, parser, 8.0, keepalive=True)
+        check("IDLE復帰(フレーム再開)", n_st >= 100, f"{n_st}フレーム受信 (要 >=100)")
+        check("IDLE復帰(ToF WAKE)", tof_ok_n > 0,
+              f"tof_ok=Trueが{tof_ok_n}件 (要 >0。復帰後ToFが再びrangingしているはず)")
 
         # 4) 音声ストリーミング
         print("4) 音声ストリーミング('a'で開始、's'で停止)")
         ser.write(b"a")
-        _, n_audio, _, _ = collect(ser, parser, 3.0, keepalive=True)
+        _, n_audio, _, _, _, _ = collect(ser, parser, 3.0, keepalive=True)
         check("音声ストリーム開始", n_audio >= 50,
               f"CMD_AUDIOを{n_audio}フレーム受信 (要 >=50)")
         ser.write(b"s")
-        _, n_audio_off, _, _ = collect(ser, parser, 2.0, keepalive=True)
+        _, n_audio_off, _, _, _, _ = collect(ser, parser, 2.0, keepalive=True)
         check("音声ストリーム停止", n_audio_off <= 5,
               f"停止後 {n_audio_off}フレーム (要 <=5。惰性分の許容)")
 
