@@ -18,6 +18,7 @@
 #include "comm_api.h"
 #include "ns_audio.h"
 #include "sensors.h"
+#include "triggers.h"
 
 #include "main.h"   /* HAL_GetTick */
 
@@ -52,6 +53,7 @@ void App_Run(void)
   uint32_t lastActivityMs = HAL_GetTick(); /* start ACTIVE, not instantly idle */
   uint32_t nextTelemetryTick = 0U;
   uint32_t nextLedTick = 0U;
+  static FullStatus_t st; /* holds the latest snapshot for Trigger_Poll() too */
 
   while (1)
   {
@@ -59,11 +61,13 @@ void App_Run(void)
 
     uint32_t now = HAL_GetTick();
 
-    /* Poll host input every loop (even in IDLE) - this is the wake source. */
-    uint8_t cmdByte = 0U;
-    if (Comm_PollHostCommand(&cmdByte) != COMM_POLL_NONE)
+    /* Poll every trigger source every loop (even in IDLE) - this is the
+     * wake source. TRIG_COMM covers any inbound host traffic (UART/BLE/TCP,
+     * including OTA bytes); TRIG_LIGHT/TRIG_AUDIO fire once their thresholds
+     * are configured (see triggers.h), using the last telemetry snapshot. */
+    if (Trigger_Poll(&st) != TRIG_NONE)
     {
-      lastActivityMs = now; /* any inbound host traffic counts as activity */
+      lastActivityMs = now;
     }
 
     if (mode == MODE_ACTIVE)
@@ -112,7 +116,6 @@ void App_Run(void)
     if ((int32_t)(now - nextTelemetryTick) >= 0)
     {
       nextTelemetryTick = now + telemetryPeriodMs;
-      static FullStatus_t st;
       build_status(&st);
       (void)Comm_SendTelemetry(&st);
     }
