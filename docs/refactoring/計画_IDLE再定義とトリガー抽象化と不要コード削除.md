@@ -161,10 +161,10 @@ void Trigger_SetAudioThreshold(int16_t rms);   /* 音圧しきい値 */
 - 編集前に `.cproject` をscratchpadへ退避。編集後は必ず `-importAll` で両構成ビルド。
 
 ### P3-3. 未使用ドライバ削除（P3-1の後）
-- **実施結果（2026-07-14）**: `Drivers/BSP/Components/m24256` と `Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c/h` のみ削除。自己参照のみで完全に孤立していることを確認済み。
-- **`aps6408`/`veml6030` は削除を見送った**（計画時の想定が誤っていたことが実装確認で判明）:
-  - `aps6408`: `b_u585i_iot02a_ospi.c` が同一ファイル内でNOR（`ota.cpp`が使用中）とPSRAM（`APS6408_*`）の実装を混在させており、コンポーネント単体の削除はそのファイルの巻き添え削除を伴う。PSRAM自体は未使用だが、リスクに対して効果が小さく見送り。
-  - `veml6030`: `b_u585i_iot02a_light_sensor.c` の `BSP_LIGHT_SENSOR_Init` が VEML6030 を先にprobeし、失敗したら VEML3235 にフォールバックする設計（ボードリビジョン差異の吸収）。削除すると一部リビジョンで光センサーが動かなくなるリスクがあるため見送り。
+- **実施結果 第1弾（2026-07-14）**: `Drivers/BSP/Components/m24256` と `Drivers/BSP/B-U585I-IOT02A/b_u585i_iot02a_eeprom.c/h` を削除。自己参照のみで完全に孤立していることを確認済み。
+- **実施結果 第2弾（2026-07-14、`aps6408`/`veml6030` も完了）**:
+  - `aps6408`（PSRAM）: `b_u585i_iot02a_ospi.c/h` はNOR（`ota.cpp`が使用中）とPSRAM（`APS6408_*`）の実装がファイル内で明確にセクション分離されていることを確認（NOR/RAM共有関数`OSPI_DLYB_Enable`のみ例外的にNOR側へ寄せた）。PSRAM関連コード（Exported/Private Variables・Functions、約550行）をEditツールで外科的に削除し、`aps6408`コンポーネント本体も削除。ついでにP3-1のテスト削除で孤立していた`app_config.h`の`CFG_TEST_*`群（16定数）も削除。実機検証はverify_regression.py全項目PASSに加え、**OTA実ファーム往復（NOR flashへのステージング・Bank2書込み・起動）を実施しNOR機能が無傷であることを確認**。
+  - `veml6030`: 当初「`BSP_LIGHT_SENSOR_Init`がVEML6030を先にprobeしVEML3235にフォールバックする実行時分岐」と誤認識していたが、実際は`#if defined (USE_B_U585I_IOT02A_U585AI_REVD)`によるコンパイル時分岐で、このマクロはプロジェクト全体で未定義。VEML6030コードは常にビルド対象外(#else側のVEML3235のみ有効)と判明したため削除。`light_sensor.c/h`の`#if`ブロック自体は将来のREVD基板対応の余地として残した。
 
 ### P3 検証（各サブステップ）
 `-importAll` 付きヘッドレスビルドで Secure+NonSecure Debug が0エラー → 書込み→verify全項目PASS → **ビルド時間・elfサイズの before/after を記録**（短縮効果の定量確認）。
