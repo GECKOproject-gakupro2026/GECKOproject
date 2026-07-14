@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "secure_nsc.h"
+#include "board_io.h"
 #include "sensors.h"
 #include "ns_audio.h"
 #include "app_config.h"
@@ -39,17 +40,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   18U
-
-/* User LEDs on this board: LD6 red = PH6, LD7 green = PH7 */
-#define LED_RED_PIN      GPIO_PIN_6
-#define LED_GREEN_PIN    GPIO_PIN_7
-#define LED_PORT         GPIOH
-
-/* USER button (B1): PC13, active-high, pulldown (matches the Secure BSP's
- * BSP_PB_Init/BUTTON_MODE_GPIO configuration it used before Phase B). */
-#define BUTTON_USER_PIN  GPIO_PIN_13
-#define BUTTON_USER_PORT GPIOC
+#define NS_APP_VERSION   19U
 
 /* Version banner placed at a fixed offset so the Secure loader (and a host
  * tool) can read the staged/running NonSecure version without executing it.
@@ -86,50 +77,6 @@ static void MX_GTZC_NS_Init(void);
 __attribute__((section(".ns_appinfo"), used))
 const ns_appinfo_t g_ns_appinfo = {0x4E534150U, NS_APP_VERSION, {0U, 0U}};
 
-/* Mirror the version into a fixed SRAM3 (non-secure RAM) word so the Secure
- * side can display which NonSecure version is actually running. */
-#define NS_RUNNING_VERSION_ADDR  0x200BFFF0UL /* top of NS SRAM3 */
-
-static void led_init(void)
-{
-  GPIO_InitTypeDef gpio = {0};
-  __HAL_RCC_GPIOH_CLK_ENABLE();
-  gpio.Pin = LED_RED_PIN | LED_GREEN_PIN;
-  gpio.Mode = GPIO_MODE_OUTPUT_PP;
-  gpio.Pull = GPIO_NOPULL;
-  gpio.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED_PORT, &gpio);
-  /* both off (PH6/PH7 read off = SET on this board's LED wiring) */
-  HAL_GPIO_WritePin(LED_PORT, LED_RED_PIN | LED_GREEN_PIN, GPIO_PIN_SET);
-}
-
-/* TrustZone app-layer refactor Phase B: first sensor input moved to
- * NonSecure. PC13 was released NSEC by Secure's MX_GPIO_Init(); this
- * mirrors the BSP's BUTTON_MODE_GPIO config (input, pulldown). */
-static void button_init(void)
-{
-  GPIO_InitTypeDef gpio = {0};
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  gpio.Pin = BUTTON_USER_PIN;
-  gpio.Mode = GPIO_MODE_INPUT;
-  gpio.Pull = GPIO_PULLDOWN;
-  gpio.Speed = GPIO_SPEED_FREQ_HIGH;
-  HAL_GPIO_Init(BUTTON_USER_PORT, &gpio);
-}
-
-static uint8_t button_read(void)
-{
-  return (HAL_GPIO_ReadPin(BUTTON_USER_PORT, BUTTON_USER_PIN) == GPIO_PIN_SET) ? 1U : 0U;
-}
-
-/* Both user LEDs use the same wiring: SET = off, RESET = on (matches the
- * long-standing NonSecure demo where green blinked via TogglePin and red
- * was held off with SET). */
-static void led_green_off(void) { HAL_GPIO_WritePin(LED_PORT, LED_GREEN_PIN, GPIO_PIN_SET); }
-static void led_red_off(void)   { HAL_GPIO_WritePin(LED_PORT, LED_RED_PIN, GPIO_PIN_SET); }
-static void led_green_toggle(void) { HAL_GPIO_TogglePin(LED_PORT, LED_GREEN_PIN); }
-static void led_red_toggle(void)   { HAL_GPIO_TogglePin(LED_PORT, LED_RED_PIN); }
-
 /* NonSecure is the application layer's main loop. It pumps the Secure comm
  * service via Comm_Poll() and submits a telemetry snapshot through the
  * Comm_SendTelemetry() NSC gateway. Phase C: env/motion/light/ToF sensors
@@ -141,7 +88,7 @@ static void build_status(FullStatus_t *st)
   Audio_Refresh(st);
   st->ver = 2U;
   st->uptime_ms = HAL_GetTick();
-  st->button = button_read();
+  st->button = Board_ButtonRead();
 }
 /* USER CODE END 0 */
 
@@ -174,12 +121,11 @@ int main(void)
 
   /* Initialize all configured peripherals */
   /* USER CODE BEGIN 2 */
-  led_init();
-  button_init();
+  Board_Init();
   Sensors_Init();
   Audio_Init();
   /* Publish the running version for the Secure side / host tools */
-  *(volatile uint32_t *)NS_RUNNING_VERSION_ADDR = g_ns_appinfo.version;
+  Board_PublishVersion(g_ns_appinfo.version);
   /* Startup reached the main loop without a fault: tell the Secure Stage-0
    * loader this boot was good, clearing its rollback attempt counter (OTA
    * Phase 2, see boot_guard.hpp on the Secure side). */
@@ -223,8 +169,8 @@ int main(void)
         Sensors_Stop();
         Audio_Stop();
         Comm_SetTelemetryEnabled(0U);
-        led_green_off();
-        led_red_off();
+        Board_LedGreenOff();
+        Board_LedRedOff();
         nextLedTick = now;
       }
       else
@@ -239,8 +185,8 @@ int main(void)
         if ((int32_t)(now - nextLedTick) >= 0)
         {
           nextLedTick = now + CFG_ACTIVE_HB_MS;
-          led_red_off();
-          led_green_toggle(); /* green heartbeat */
+          Board_LedRedOff();
+          Board_LedGreenToggle(); /* green heartbeat */
         }
       }
     }
@@ -253,15 +199,15 @@ int main(void)
         Sensors_Resume();
         Audio_Resume();
         Comm_SetTelemetryEnabled(1U);
-        led_red_off();
+        Board_LedRedOff();
         nextTelemetryTick = now;
         nextLedTick = now;
       }
       else if ((int32_t)(now - nextLedTick) >= 0)
       {
         nextLedTick = now + CFG_IDLE_LED_BLINK_MS;
-        led_green_off();
-        led_red_toggle(); /* red slow blink = low-power indicator */
+        Board_LedGreenOff();
+        Board_LedRedToggle(); /* red slow blink = low-power indicator */
       }
     }
   }
