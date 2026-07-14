@@ -29,7 +29,6 @@ extern "C" {
 #include "b_u585i_iot02a_conf.h"
 #include "b_u585i_iot02a_errno.h"
 #include "../Components/mx25lm51245g/mx25lm51245g.h"
-#include "../Components/aps6408/aps6408.h"
 
 /** @addtogroup BSP
   * @{
@@ -93,35 +92,6 @@ typedef struct
   BSP_OSPI_NOR_Interface_t   InterfaceMode;      /*!<  Current Flash Interface mode */
   BSP_OSPI_NOR_Transfer_t    TransferRate;       /*!<  Current Flash Transfer rate  */
 } BSP_OSPI_NOR_Init_t;
-/**
-  * @}
-  */
-
-/** @defgroup B_U585I_IOT02A_OSPI_RAM_Exported_Types OSPI RAM Exported Types
-  * @{
-  */
-#define BSP_OSPI_RAM_BurstLength_t APS6408_BurstLength_t
-
-typedef enum
-{
-  BSP_OSPI_RAM_VARIABLE_LATENCY = HAL_OSPI_VARIABLE_LATENCY,
-  BSP_OSPI_RAM_FIXED_LATENCY    = HAL_OSPI_FIXED_LATENCY
-} BSP_OSPI_RAM_Latency_t;
-
-typedef enum
-{
-  BSP_OSPI_RAM_HYBRID_BURST = 0,
-  BSP_OSPI_RAM_LINEAR_BURST
-} BSP_OSPI_RAM_BurstType_t;
-
-typedef struct
-{
-  OSPI_Access_t               IsInitialized;   /*!< Instance access Flash method */
-  BSP_OSPI_RAM_Latency_t      LatencyType;   /*!< Latency Type of Instance     */
-  BSP_OSPI_RAM_BurstType_t    BurstType;     /*!< Burst Type of Instance       */
-  BSP_OSPI_RAM_BurstLength_t  BurstLength;   /*!< Burst Length of Instance     */
-} OSPI_RAM_Ctx_t;
-
 /**
   * @}
   */
@@ -196,71 +166,6 @@ typedef struct
 #define OSPI_NOR_D7_GPIO_PORT                 GPIOH
 #define OSPI_NOR_D7_PIN_AF                    GPIO_AF5_OCTOSPI2
 
-/* Definition for OSPI RAM clock resources */
-#define OSPI_RAM_CLK_ENABLE()                 __HAL_RCC_OSPI1_CLK_ENABLE()
-#define OSPI_RAM_CLK_DISABLE()                __HAL_RCC_OSPI1_CLK_DISABLE()
-
-#define OSPI_RAM_CLK_GPIO_CLK_ENABLE()        __HAL_RCC_GPIOB_CLK_ENABLE()
-#define OSPI_RAM_DQS_GPIO_CLK_ENABLE()        __HAL_RCC_GPIOE_CLK_ENABLE()
-#define OSPI_RAM_CS_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOB_CLK_ENABLE()
-#define OSPI_RAM_D0_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOF_CLK_ENABLE()
-#define OSPI_RAM_D1_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOF_CLK_ENABLE()
-#define OSPI_RAM_D2_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOF_CLK_ENABLE()
-#define OSPI_RAM_D3_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOF_CLK_ENABLE()
-#define OSPI_RAM_D4_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOH_CLK_ENABLE()
-#define OSPI_RAM_D5_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOI_CLK_ENABLE()
-#define OSPI_RAM_D6_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOC_CLK_ENABLE()
-#define OSPI_RAM_D7_GPIO_CLK_ENABLE()         __HAL_RCC_GPIOD_CLK_ENABLE()
-
-#define OSPI_RAM_FORCE_RESET()                __HAL_RCC_OSPI1_FORCE_RESET()
-#define OSPI_RAM_RELEASE_RESET()              __HAL_RCC_OSPI1_RELEASE_RESET()
-
-/* Definition for OSPI RAM Pins */
-/* OSPI_CLK */
-#define OSPI_RAM_CLK_PIN                      GPIO_PIN_10
-#define OSPI_RAM_CLK_GPIO_PORT                GPIOB
-#define OSPI_RAM_CLK_PIN_AF                   GPIO_AF10_OCTOSPI1
-/* OSPI_DQS */
-#define OSPI_RAM_DQS_PIN                      GPIO_PIN_3
-#define OSPI_RAM_DQS_GPIO_PORT                GPIOE
-#define OSPI_RAM_DQS_PIN_AF                   GPIO_AF3_OCTOSPI1
-/* OSPI_CS */
-#define OSPI_RAM_CS_PIN                       GPIO_PIN_11
-#define OSPI_RAM_CS_GPIO_PORT                 GPIOB
-#define OSPI_RAM_CS_PIN_AF                    GPIO_AF10_OCTOSPI1
-/* OSPI_D0 */
-#define OSPI_RAM_D0_PIN                       GPIO_PIN_8
-#define OSPI_RAM_D0_GPIO_PORT                 GPIOF
-#define OSPI_RAM_D0_PIN_AF                    GPIO_AF10_OCTOSPI1
-/* OSPI_D1 */
-#define OSPI_RAM_D1_PIN                       GPIO_PIN_9
-#define OSPI_RAM_D1_GPIO_PORT                 GPIOF
-#define OSPI_RAM_D1_PIN_AF                    GPIO_AF10_OCTOSPI1
-/* OSPI_D2 */
-#define OSPI_RAM_D2_PIN                       GPIO_PIN_7
-#define OSPI_RAM_D2_GPIO_PORT                 GPIOF
-#define OSPI_RAM_D2_PIN_AF                    GPIO_AF10_OCTOSPI1
-/* OSPI_D3 */
-#define OSPI_RAM_D3_PIN                       GPIO_PIN_6
-#define OSPI_RAM_D3_GPIO_PORT                 GPIOF
-#define OSPI_RAM_D3_PIN_AF                    GPIO_AF10_OCTOSPI1
-/* OSPI_D4 */
-#define OSPI_RAM_D4_PIN                       GPIO_PIN_2
-#define OSPI_RAM_D4_GPIO_PORT                 GPIOH
-#define OSPI_RAM_D4_PIN_AF                    GPIO_AF3_OCTOSPI1
-/* OSPI_D5 */
-#define OSPI_RAM_D5_PIN                       GPIO_PIN_0
-#define OSPI_RAM_D5_GPIO_PORT                 GPIOI
-#define OSPI_RAM_D5_PIN_AF                    GPIO_AF3_OCTOSPI1
-/* OSPI_D6 */
-#define OSPI_RAM_D6_PIN                       GPIO_PIN_3
-#define OSPI_RAM_D6_GPIO_PORT                 GPIOC
-#define OSPI_RAM_D6_PIN_AF                    GPIO_AF10_OCTOSPI1
-/* OSPI_D7 */
-#define OSPI_RAM_D7_PIN                       GPIO_PIN_7
-#define OSPI_RAM_D7_GPIO_PORT                 GPIOD
-#define OSPI_RAM_D7_PIN_AF                    GPIO_AF10_OCTOSPI1
-
 /**
   * @}
   */
@@ -290,35 +195,12 @@ typedef struct
   * @}
   */
 
-/** @defgroup B_U585I_IOT02A_OSPI_RAM_Exported_Constants OSPI RAM Exported Constants
-  * @{
-  */
-#define OSPI_RAM_INSTANCES_NUMBER         1U
-
-/* OSPI Burst length */
-#define BSP_OSPI_RAM_BURST_16_BYTES       (BSP_OSPI_RAM_BurstLength_t)APS6408_BURST_16_BYTES
-#define BSP_OSPI_RAM_BURST_32_BYTES       (BSP_OSPI_RAM_BurstLength_t)APS6408_BURST_32_BYTES
-#define BSP_OSPI_RAM_BURST_64_BYTES       (BSP_OSPI_RAM_BurstLength_t)APS6408_BURST_64_BYTES
-#define BSP_OSPI_RAM_BURST_128_BYTES      (BSP_OSPI_RAM_BurstLength_t)APS6408_BURST_128_BYTES
-/**
-  * @}
-  */
-
 /* Exported variables --------------------------------------------------------*/
 /** @defgroup B_U585I_IOT02A_OSPI_NOR_Exported_Variables OSPI NOR Exported Variables
   * @{
   */
 extern OSPI_HandleTypeDef hospi_nor[OSPI_NOR_INSTANCES_NUMBER];
 extern OSPI_NOR_Ctx_t Ospi_Nor_Ctx[OSPI_NOR_INSTANCES_NUMBER];
-/**
-  * @}
-  */
-
-/** @defgroup B_U585I_IOT02A_OSPI_RAM_Exported_Variables OSPI RAM Exported Variables
-  * @{
-  */
-extern OSPI_HandleTypeDef hospi_ram[OSPI_RAM_INSTANCES_NUMBER];
-extern OSPI_RAM_Ctx_t Ospi_Ram_Ctx[OSPI_RAM_INSTANCES_NUMBER];
 /**
   * @}
   */
@@ -352,28 +234,9 @@ int32_t BSP_OSPI_NOR_LeaveDeepPowerDown(uint32_t Instance);
   * @}
   */
 
-/** @defgroup B_U585I_IOT02A_OSPI_RAM_Exported_Functions OSPI RAM Exported Functions
-  * @{
-  */
-int32_t BSP_OSPI_RAM_Init(uint32_t Instance);
-int32_t BSP_OSPI_RAM_DeInit(uint32_t Instance);
-#if (USE_HAL_OSPI_REGISTER_CALLBACKS == 1)
-int32_t BSP_OSPI_RAM_RegisterMspCallbacks(uint32_t Instance, BSP_OSPI_Cb_t *CallBacks);
-int32_t BSP_OSPI_RAM_RegisterDefaultMspCallbacks(uint32_t Instance);
-#endif /* (USE_HAL_OSPI_REGISTER_CALLBACKS == 1) */
-int32_t BSP_OSPI_RAM_Read(uint32_t Instance, uint8_t *pData, uint32_t ReadAddr, uint32_t Size);
-int32_t BSP_OSPI_RAM_Write(uint32_t Instance, uint8_t *pData, uint32_t WriteAddr, uint32_t Size);
-int32_t BSP_OSPI_RAM_EnableMemoryMappedMode(uint32_t Instance);
-int32_t BSP_OSPI_RAM_DisableMemoryMappedMode(uint32_t Instance);
-int32_t BSP_OSPI_RAM_ReadID(uint32_t Instance, uint8_t *Id);
-/**
-  * @}
-  */
-
 /* These functions can be modified in case the current settings
    need to be changed for specific application needs */
 HAL_StatusTypeDef MX_OSPI_NOR_Init(OSPI_HandleTypeDef *hospi, MX_OSPI_InitTypeDef *Init);
-HAL_StatusTypeDef MX_OSPI_RAM_Init(OSPI_HandleTypeDef *hospi, MX_OSPI_InitTypeDef *Init);
 /**
   * @}
   */
