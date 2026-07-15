@@ -29,7 +29,11 @@
 static uint8_t *buffer_rx;
 static uint8_t buffer_rx_size;
 static uint8_t buffer_rx_cursor;
-static char str_received[64];
+static char str_received[160]; /* was 64: truncated long AT+... lines (e.g.
+                                   BLE_EVT_WRITE with a hex payload) via the
+                                   unchecked strcpy() below; must stay >=
+                                   the caller's buffer_rx size passed to
+                                   stm32wb_at_Init() (160 on both sides) */
 
 float tab_conv_tx_power[32] = {-40.00f, -20.85f, -19.75f, -18.85f, 
                                -17.60f, -16.50f, -15.25f, -14.10f,

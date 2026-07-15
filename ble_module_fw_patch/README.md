@@ -27,9 +27,13 @@ STM32CubeWB v1.18.0 の `Projects/P-NUCLEO-WB55.Nucleo/Applications/BLE/BLE_AT_S
    を追加し`UTIL_SEQ_RegTask`で登録
 2. **切断後に広告が再開しない**: `HCI_DISCONNECTION_COMPLETE_EVT_CODE`ハンドラに
    `Adv_Request(APP_BLE_FAST_ADV)`を追加
-3. **notifyペイロードが2バイト固定**: P2Pサーバーの notify 特性はボタン通知専用に
+3. **notifyペイロードが2バイト固定→20B→64Bに拡張**: P2Pサーバーの notify 特性はボタン通知専用に
    2バイト固定長で実装されていた。GATT特性長を2→20バイトに拡張し、任意ペイロードを
-   送信する`P2PS_STM_Notify_Raw()`を追加。`Manage_Update_Charac()`から呼ぶよう変更
+   送信する`P2PS_STM_Notify_Raw()`を追加。`Manage_Update_Charac()`から呼ぶよう変更。
+   その後、U585側が39B(MiniStatus)を47Bフレームとして送るようになり20B上限を超過、
+   ATコマンドは"OK"を返すもののGATT側で送信が黙殺される不具合が発生したため、
+   2026-07-15にGATT特性長を20→**64バイト**へ再拡張（`aci_gatt_add_char`の第4引数）。
+   これは録音チャンク送信(最大61B)にも収まる上限。
 4. **AT通信バッファのオーバーフロー**: `ble_at_server.c`の`at_buffer`と`main.c`の
    extern宣言を64→160バイトに拡張（20Bのnotifyペイロードは0x表記で65文字を超えるため）
 
