@@ -9,6 +9,7 @@
 #include "app_config.h"    /* CFG_BLE_BAUDRATE */
 #include "frame_codec.h"   /* Frame_Encode, FRAME_CMD_STATUS_MINI */
 #include "main.h"
+#include "recorder.hpp"
 
 #include "b_u585i_iot02a.h" /* BSP_LED_On/Off, LED_GREEN */
 
@@ -33,6 +34,15 @@ uint8_t bleRxByte;
 bool bleGlueReady = false;
 
 uint8_t bleSeq_ = 0;   /* Service のメンバから移す（BLE専用のシーケンス番号） */
+
+/* --- BLE recording control/transfer state --- */
+Frame_Decoder bleWriteDecoder;
+bool bleWriteDecoderInit = false;
+volatile uint8_t bleRecCmd = 0; /* 0=none, 1=start, 2=stop (set by the GATT
+                                    write callback, consumed once) */
+bool bleRecSendPending = false;
+uint32_t bleRecOff = 0;
+uint16_t bleRecChunkSeq = 0;
 
 /* Raw AT exchange (polling, before the interrupt-driven client starts):
  * prints the module's literal reply so protocol mismatches are visible. */
@@ -134,6 +144,84 @@ void SendStatus(const telemetry::FullStatus &st)
   }
 }
 
+/* recorder::Stop() flips bleRecCmd==2 handling (see comm_service.cpp's
+ * poll(), which calls recorder::Stop() then sets bleRecSendPending) - this
+ * function just drains the ring a few chunks per call. REC_CHUNK/REC_END
+ * are NOT run through Frame_Encode: a 47-byte frame_codec frame already
+ * barely fit the AT-server's 64-byte characteristic (see the str_received[64]
+ * overflow this project hit at 47 bytes), and REC_CHUNK's ~58-byte ADPCM
+ * payload plus an 8-byte frame_codec overhead would risk the same margin -
+ * so this uses a minimal raw TLV instead: [cmd u8][seq u16 LE][payload]. */
+void PumpRecTx()
+{
+  if (!bleRecSendPending || !bleLinkOk || !bleConnected)
+  {
+    return;
+  }
+
+  constexpr uint32_t kChunkPayload = 58U;
+  constexpr uint32_t kChunksPerPump = 2U; /* ~200 ms/notify at 9600 baud */
+
+  for (uint32_t i = 0; i < kChunksPerPump; i++)
+  {
+    uint8_t raw[3U + kChunkPayload];
+    uint32_t n = recorder::Read(bleRecOff, &raw[3], kChunkPayload);
+    if (n == 0U)
+    {
+      /* Ring drained: send REC_END with the total sample count + CRC16
+       * over everything sent so far (offset 0..bleRecOff), so the PC can
+       * verify nothing was dropped mid-stream. */
+      uint8_t end[1U + 4U + 2U];
+      end[0] = FRAME_CMD_REC_END;
+      uint32_t total = recorder::TotalSamples();
+      end[1] = static_cast<uint8_t>(total & 0xFFU);
+      end[2] = static_cast<uint8_t>((total >> 8) & 0xFFU);
+      end[3] = static_cast<uint8_t>((total >> 16) & 0xFFU);
+      end[4] = static_cast<uint8_t>((total >> 24) & 0xFFU);
+      uint16_t crc = Frame_Crc16(end, 5U);
+      end[5] = static_cast<uint8_t>(crc & 0xFFU);
+      end[6] = static_cast<uint8_t>(crc >> 8);
+
+      stm32wb_at_BLE_NOTIF_VAL_t notif = {};
+      notif.svc_index = 1;
+      notif.char_index = 2;
+      notif.val_tab_len = sizeof(end);
+      memcpy(notif.val_tab, end, sizeof(end));
+      (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
+
+      bleRecSendPending = false;
+      bleRecOff = 0;
+      return;
+    }
+
+    raw[0] = FRAME_CMD_REC_CHUNK;
+    raw[1] = static_cast<uint8_t>(bleRecChunkSeq & 0xFFU);
+    raw[2] = static_cast<uint8_t>(bleRecChunkSeq >> 8);
+    bleRecChunkSeq++;
+    bleRecOff += n;
+
+    stm32wb_at_BLE_NOTIF_VAL_t notif = {};
+    notif.svc_index = 1;
+    notif.char_index = 2;
+    notif.val_tab_len = static_cast<uint8_t>(3U + n);
+    memcpy(notif.val_tab, raw, 3U + n);
+    (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
+  }
+}
+
+uint8_t TakeRecCmd()
+{
+  uint8_t cmd = bleRecCmd;
+  bleRecCmd = 0U;
+  return cmd;
+}
+
+void StartRecTx()
+{
+  bleRecSendPending = true;
+  bleRecOff = 0;
+}
+
 } // namespace comm_ble
 
 /* ---- STM32WB AT transport glue (C linkage, UART4 interrupt driven) ------- */
@@ -213,6 +301,36 @@ extern "C" uint8_t stm32wb_at_BLE_EVT_WRITE_cb(stm32wb_at_BLE_EVT_WRITE_t *param
     else
     {
       BSP_LED_Off(LED_GREEN);
+    }
+  }
+
+  /* Recording control: PC sends a normal frame_codec REC_START/REC_STOP
+   * frame (via BleTransport.write on fe41), which this feeds through the
+   * shared Frame_Decoder byte by byte to reuse the same SOF/CRC/EOF framing
+   * as every other transport. */
+  if (!comm_ble::bleWriteDecoderInit)
+  {
+    Frame_DecoderInit(&comm_ble::bleWriteDecoder);
+    comm_ble::bleWriteDecoderInit = true;
+  }
+  for (uint8_t i = 0; i < param->val_tab_len; i++)
+  {
+    uint8_t cmd, seq;
+    const uint8_t *payload;
+    uint16_t len;
+    Frame_FeedResult r = Frame_DecoderFeed(&comm_ble::bleWriteDecoder,
+                                           param->val_tab[i], &cmd, &seq,
+                                           &payload, &len);
+    if (r == FRAME_FEED_COMPLETE)
+    {
+      if (cmd == FRAME_CMD_REC_START)
+      {
+        comm_ble::bleRecCmd = 1U;
+      }
+      else if (cmd == FRAME_CMD_REC_STOP)
+      {
+        comm_ble::bleRecCmd = 2U;
+      }
     }
   }
   return 0;

@@ -29,6 +29,19 @@ bool IsConnected();
  * 未接続なら何もしない。 */
 void SendStatus(const telemetry::FullStatus &st);
 
+/* recorder::Stop()後に録音済みADPCMデータをREC_CHUNK/REC_END生TLVで
+ * notify送信するポンプ。呼ぶたびに数チャンクだけ送る(BLE 9600baud律速)。
+ * 送信対象がなければ何もしない。Service::poll()から毎回呼ぶ想定。 */
+void PumpRecTx();
+
+/* BLE write(fe41)で受信したREC_START/STOPコマンドを取り出す。
+ * 戻り値: 0=なし, 1=start, 2=stop。呼ぶと内部状態は0にクリアされる。 */
+uint8_t TakeRecCmd();
+
+/* PumpRecTx()に「録音データの送信待ちがある」ことを伝える。
+ * Service::poll()がrecorder::Stop()を呼んだ直後に呼ぶ。 */
+void StartRecTx();
+
 } // namespace comm_ble
 
 #endif /* COMM_BLE_HPP */

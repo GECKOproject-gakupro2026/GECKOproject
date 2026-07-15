@@ -222,7 +222,10 @@ void P2PS_STM_Init(void)
     COPY_P2P_WRITE_CHAR_UUID(uuid16.Char_UUID_128);
     aci_gatt_add_char(aPeerToPeerContext.PeerToPeerSvcHdle,
                       UUID_TYPE_128, &uuid16,
-                      2,                                   
+                      64, /* was 2: only fit the stock 2-byte LED demo
+                             command, silently rejecting the 8+ byte
+                             frame_codec REC_START/STOP frames written from
+                             the PC over fe41 */
                       CHAR_PROP_WRITE_WITHOUT_RESP|CHAR_PROP_READ,
                       ATTR_PERMISSION_NONE,
                       GATT_NOTIFY_ATTRIBUTE_WRITE, /* gattEvtMask */

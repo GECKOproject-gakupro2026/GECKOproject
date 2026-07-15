@@ -37,6 +37,7 @@
 #include "comm_uart.hpp"
 #include "comm_wifi.hpp"
 #include "mcu_info.hpp"
+#include "recorder.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -614,6 +615,24 @@ void Service::poll()
     status_.ble_alive = comm_ble::IsAlive() ? 1U : 0U;
   }
   profLoops++;
+
+  /* Recording control: BLE write (fe41) frames are parsed into bleRecCmd by
+   * comm_ble.cpp's GATT write callback; this is the only place that consumes
+   * it. Starting a recording forces audioStream_ off so the two don't fight
+   * over the same resampled-audio pipeline (see poll()'s audio block). */
+  uint8_t recCmd = comm_ble::TakeRecCmd();
+  if (recCmd == 1U)
+  {
+    audioStream_ = false;
+    recorder::Start();
+  }
+  else if (recCmd == 2U)
+  {
+    recorder::Stop();
+    comm_ble::StartRecTx();
+  }
+  comm_ble::PumpRecTx();
+
   if (telemetryEnabled && static_cast<int32_t>(now - nextBleTick_) >= 0)
   {
     nextBleTick_ += kBlePeriodMs;
@@ -661,7 +680,14 @@ void Service::poll()
    * from the nominal/measured sample-rate ratio: the DMA half/full-complete
    * interrupt cadence runs measurably faster than that simple ratio would
    * predict, for reasons not fully root-caused (see 計画_...md 付録). */
-  if (audioStream_)
+  /* recorder::Active() shares this same resampled-audio pipeline (both pull
+   * from the g_AudioEvents-driven DMA halves via FeedForResample/PopResampled),
+   * so the two must stay mutually exclusive: whichever caller starts a
+   * recording is responsible for turning audioStream_ off first (see
+   * recorder.hpp), otherwise the 512-sample windows would be split between
+   * the UART/TCP frame encoder and the recording ring instead of each
+   * getting a full copy. */
+  if (audioStream_ || recorder::Active())
   {
     uint32_t events = g_AudioEvents;
     if (events != 0U)
@@ -677,15 +703,22 @@ void Service::poll()
     {
       static int16_t corrected[512];
       audio_capture::PopResampled(corrected, 512U);
-      size_t len = Frame_Encode(
-          FRAME_CMD_AUDIO, audioSeq_++,
-          reinterpret_cast<const uint8_t *>(corrected), 1024U,
-          audioFrame, sizeof(audioFrame));
-      if (len > 0U)
+      if (audioStream_)
       {
-        /* audio must not drop: wait for the in-flight frame (<= 12 ms) */
-        (void)comm_uart::SendAsync(audioFrame, len, 15);
-        comm_wifi::SendRaw(audioFrame, static_cast<int32_t>(len));
+        size_t len = Frame_Encode(
+            FRAME_CMD_AUDIO, audioSeq_++,
+            reinterpret_cast<const uint8_t *>(corrected), 1024U,
+            audioFrame, sizeof(audioFrame));
+        if (len > 0U)
+        {
+          /* audio must not drop: wait for the in-flight frame (<= 12 ms) */
+          (void)comm_uart::SendAsync(audioFrame, len, 15);
+          comm_wifi::SendRaw(audioFrame, static_cast<int32_t>(len));
+        }
+      }
+      else
+      {
+        recorder::FeedPcm(corrected, 512U);
       }
     }
   }

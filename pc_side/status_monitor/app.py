@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime as _dt
 import pathlib
 import queue
+import struct
 import subprocess
 import threading
 import tkinter as tk
@@ -29,6 +30,7 @@ import wave
 from tkinter import messagebox, ttk
 from typing import Optional
 
+import adpcm
 import protocol
 import transports
 
@@ -103,6 +105,7 @@ class StatusMonitorApp:
         self.streaming = False
         self.recording = False
         self.record_samples: list[int] = []
+        self.ble_rec_chunks: dict[int, bytes] = {}
         self.last_wav: pathlib.Path | None = None
 
         # Phase E low-power support: the firmware idles (stops telemetry, slow-
@@ -401,6 +404,7 @@ class StatusMonitorApp:
             self.transport.stop()
             self.transport = None
             self.connect_btn.configure(text="接続")
+            self.record_btn.configure(state="disabled")
             self._log("disconnected")
             return
 
@@ -424,6 +428,12 @@ class StatusMonitorApp:
         self.radio_vars["link"].set(link)
         self.transport.start()
         self.connect_btn.configure(text="切断")
+        if link == "BLE":
+            # BLE can't stream PCM live, but the record button drives the
+            # SRAM-buffered record-then-send flow (_toggle_record_ble)
+            # independently of self.streaming.
+            self.record_btn.configure(state="normal")
+            self.audio_info_var.set("BLE: 録音開始→停止で一括転送 (リアルタイム再生不可)")
 
     # ---------------- low-power (Phase E) ----------------
     def _on_keep_awake_toggle(self) -> None:
@@ -450,6 +460,9 @@ class StatusMonitorApp:
         self._set_stream(not self.streaming)
 
     def _toggle_record(self) -> None:
+        if self.link_var.get() == "BLE":
+            self._toggle_record_ble()
+            return
         if not self.recording:
             self.recording = True
             self.record_samples = []
@@ -461,6 +474,9 @@ class StatusMonitorApp:
         if not self.record_samples:
             self._log("録音データなし")
             return
+        self._save_wav(self.record_samples)
+
+    def _save_wav(self, samples: list[int]) -> None:
         RECORD_DIR.mkdir(exist_ok=True)
         name = _dt.datetime.now().strftime("rec_%Y%m%d_%H%M%S.wav")
         path = RECORD_DIR / name
@@ -469,12 +485,58 @@ class StatusMonitorApp:
             wav.setsampwidth(2)
             wav.setframerate(protocol.AUDIO_SAMPLE_RATE)
             import struct as _struct
-            wav.writeframes(_struct.pack(f"<{len(self.record_samples)}h",
-                                         *self.record_samples))
-        secs = len(self.record_samples) / protocol.AUDIO_SAMPLE_RATE
+            wav.writeframes(_struct.pack(f"<{len(samples)}h", *samples))
+        secs = len(samples) / protocol.AUDIO_SAMPLE_RATE
         self.last_wav = path
         self.play_btn.configure(state="normal")
-        self._log(f"録音保存: {path.name} ({secs:.1f}秒, {len(self.record_samples)}サンプル)")
+        self._log(f"録音保存: {path.name} ({secs:.1f}秒, {len(samples)}サンプル)")
+
+    def _toggle_record_ble(self) -> None:
+        # BLE can't stream PCM in real time (64 B notify / low baud), so
+        # instead the board records into its own SRAM ring (ADPCM-compressed)
+        # while REC_START..REC_STOP is active, then streams the whole thing
+        # back as REC_CHUNK/REC_END once stopped (see comm_ble.cpp's
+        # PumpRecTx / recorder.cpp on the firmware side).
+        if self.transport is None:
+            return
+        if not self.recording:
+            self.recording = True
+            self.ble_rec_chunks = {}
+            self.record_btn.configure(text="録音停止")
+            self.transport.write(protocol.build_frame(protocol.CMD_REC_START, 0))
+            self._log("BLE録音開始")
+            return
+        self.recording = False
+        self.record_btn.configure(text="録音開始")
+        self.transport.write(protocol.build_frame(protocol.CMD_REC_STOP, 0))
+        self._log("BLE録音停止、転送待ち...")
+
+    def _on_ble_rec_chunk(self, seq: int, payload: bytes) -> None:
+        self.ble_rec_chunks[seq] = payload
+
+    def _handle_ble_rec_notify(self, payload: bytes) -> None:
+        # Raw TLV, not frame_codec (see comm_ble.cpp's PumpRecTx doc comment):
+        #   REC_CHUNK: [cmd u8][seq u16 LE][adpcm payload]
+        #   REC_END:   [cmd u8][total_samples u32 LE][crc16 u16 LE]
+        cmd = payload[0]
+        if cmd == protocol.CMD_REC_CHUNK and len(payload) > 3:
+            seq = payload[1] | (payload[2] << 8)
+            self._on_ble_rec_chunk(seq, payload[3:])
+        elif cmd == protocol.CMD_REC_END and len(payload) >= 7:
+            total_samples = struct.unpack_from("<I", payload, 1)[0]
+            self._on_ble_rec_end(total_samples)
+
+    def _on_ble_rec_end(self, total_samples: int) -> None:
+        samples: list[int] = []
+        for seq in sorted(self.ble_rec_chunks):
+            samples.extend(adpcm.decode_block(self.ble_rec_chunks[seq]))
+        self.ble_rec_chunks = {}
+        if len(samples) != total_samples:
+            self._log(f"BLE録音: サンプル数不一致 got={len(samples)} expected={total_samples}")
+        if not samples:
+            self._log("BLE録音: データなし")
+            return
+        self._save_wav(samples)
 
     def _play_last(self) -> None:
         if self.last_wav is None:
@@ -495,6 +557,10 @@ class StatusMonitorApp:
                 kind, payload = self.rx_queue.get_nowait()
                 if kind == "event":
                     self._log(payload)
+                    continue
+                if (self.link_var.get() == "BLE" and payload
+                        and payload[0] in (protocol.CMD_REC_CHUNK, protocol.CMD_REC_END)):
+                    self._handle_ble_rec_notify(payload)
                     continue
                 for item in self.parser.feed(payload):
                     if item[0] == "frame":

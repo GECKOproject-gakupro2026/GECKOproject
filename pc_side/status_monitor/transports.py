@@ -6,6 +6,7 @@ UI thread and run their I/O on a background thread.
 """
 from __future__ import annotations
 
+import queue
 import socket
 import threading
 from typing import Callable, Optional
@@ -15,6 +16,7 @@ EventCallback = Callable[[str], None]
 
 # ST P2P service exposed by the STM32WB5MMG AT-server firmware
 BLE_NOTIFY_CHAR_UUID = "0000fe42-8e22-4541-9d4c-21edae82ed19"
+BLE_WRITE_CHAR_UUID = "0000fe41-8e22-4541-9d4c-21edae82ed19"
 
 
 class Transport:
@@ -142,6 +144,15 @@ class BleTransport(Transport):
                  on_event: EventCallback) -> None:
         super().__init__(on_bytes, on_event)
         self.device = device  # name substring or MAC address
+        self._write_queue: "queue.Queue[bytes]" = queue.Queue()
+
+    def write(self, data: bytes) -> bool:
+        # bleak's client only runs inside the asyncio loop owned by _run()'s
+        # background thread, so a synchronous write() from the UI thread
+        # can't call it directly - queue the bytes and let session()'s loop
+        # drain them.
+        self._write_queue.put(data)
+        return True
 
     def _run(self) -> None:
         import asyncio
@@ -175,7 +186,17 @@ class BleTransport(Transport):
 
                 await client.start_notify(BLE_NOTIFY_CHAR_UUID, handle)
                 while not self._stop.is_set() and client.is_connected:
-                    await asyncio.sleep(0.2)
+                    try:
+                        data = self._write_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    else:
+                        try:
+                            await client.write_gatt_char(BLE_WRITE_CHAR_UUID, data,
+                                                          response=False)
+                        except Exception as exc:  # noqa: BLE001
+                            self.on_event(f"BLE write error: {exc}")
+                    await asyncio.sleep(0.05)
                 try:
                     await client.stop_notify(BLE_NOTIFY_CHAR_UUID)
                 except Exception:  # noqa: BLE001 - already disconnecting
