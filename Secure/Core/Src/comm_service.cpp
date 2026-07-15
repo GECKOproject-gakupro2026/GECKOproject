@@ -149,7 +149,17 @@ void Service::refreshMcuInfo(FullStatus &st)
 {
   mcu_info::Refresh(st);
 
-  /* CPU load: main-loop iterations in this window vs the best window seen */
+  /* CPU load: main-loop iterations in this window vs a slow-tracking peak
+   * rate. loopMax_ used to be strictly monotonic (never decayed once set),
+   * which meant a single blocking call early on (e.g. a slow Wi-Fi
+   * accept/recv, or the peak still being low right after boot) could pin a
+   * low ceiling that made pct spike towards 100 on perfectly normal loops
+   * ever after - reproduced as a spurious 100% reading with no matching
+   * slowdown. loopMax_ now still jumps up immediately on a new peak, but
+   * decays 1/16th of the way towards the current rate every window when
+   * rate is lower, so a transient stall or a low post-boot ceiling gets
+   * corrected within a couple of seconds instead of persisting for the
+   * life of the process. */
   uint32_t now = HAL_GetTick();
   uint32_t win = now - loopWindowStart_;
   if (win >= 500U)
@@ -158,6 +168,10 @@ void Service::refreshMcuInfo(FullStatus &st)
     if (rate > loopMax_)
     {
       loopMax_ = rate;
+    }
+    else
+    {
+      loopMax_ -= (loopMax_ - rate) / 16U;
     }
     st.cpu_load_pct = (loopMax_ > 0U)
         ? static_cast<uint8_t>(100U - (100U * rate) / loopMax_) : 0U;
