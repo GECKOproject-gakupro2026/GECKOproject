@@ -12,8 +12,10 @@
 #define CFG_AUDIO_REC_SAMPLES    2048U   /* samples per capture; 128 ms @16 kHz */
 
 /* ---- BLE module ----------------------------------------------------------
- * The factory AT-server firmware of the STM32WB5MMG runs at 9600 baud. */
-#define CFG_BLE_BAUDRATE         9600U
+ * The custom AT-server firmware of the STM32WB5MMG (ble_module_fw_patch) runs
+ * at 115200 baud. This MUST match hlpuart1.Init.BaudRate on the WB5MMG side;
+ * a mismatch makes the AT link fail completely (BLE=NG). */
+#define CFG_BLE_BAUDRATE         115200U
 #define CFG_BLE_REPLY_TIMEOUT_MS 1500U
 
 /* ---- Wi-Fi module -------------------------------------------------------- */
