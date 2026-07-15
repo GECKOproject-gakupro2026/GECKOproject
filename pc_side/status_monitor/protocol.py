@@ -22,6 +22,10 @@ CMD_FW_COMPLETE = 0x05  # PC->board: size u32 + crc16 u16
 CMD_STATUS_REQ = 0x06   # PC->board: query OTA state
 CMD_STATUS_RESP = 0x07  # board->PC: "<BIIHB" state/received/expected/crc/err
 CMD_FW_APPLY = 0x08     # PC->board: copy staged NS image to Bank2 and run it
+CMD_REC_START = 0x09    # PC->board: start SRAM recording (BLE GATT write)
+CMD_REC_STOP = 0x0A     # PC->board: stop SRAM recording (BLE GATT write)
+CMD_REC_CHUNK = 0x0B    # board->PC: raw TLV [cmd][seq u16][adpcm], not frame_codec
+CMD_REC_END = 0x0C      # board->PC: raw TLV [cmd][total_samples u32][crc16], not frame_codec
 CMD_ACK = 0x7E          # "<BBI" orig_cmd/orig_seq/arg
 CMD_NACK = 0x7F         # "<BBB" orig_cmd/orig_seq/error
 

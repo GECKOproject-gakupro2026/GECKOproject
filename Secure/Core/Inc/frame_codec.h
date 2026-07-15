@@ -35,6 +35,10 @@ extern "C" {
 #define FRAME_CMD_STATUS_REQ   0x06U   /* PC->board: query OTA state         */
 #define FRAME_CMD_STATUS_RESP  0x07U   /* board->PC: OTA state report        */
 #define FRAME_CMD_FW_APPLY     0x08U   /* copy staged NS image to Bank2/run */
+#define FRAME_CMD_REC_START    0x09U   /* PC->board: start SRAM recording    */
+#define FRAME_CMD_REC_STOP     0x0AU   /* PC->board: stop SRAM recording     */
+#define FRAME_CMD_REC_CHUNK    0x0BU   /* board->PC: raw TLV, not this codec */
+#define FRAME_CMD_REC_END      0x0CU   /* board->PC: raw TLV, not this codec */
 #define FRAME_CMD_ACK          0x7EU   /* {orig_cmd, orig_seq, u32 arg}      */
 #define FRAME_CMD_NACK         0x7FU   /* {orig_cmd, orig_seq, u8 error}     */
 
