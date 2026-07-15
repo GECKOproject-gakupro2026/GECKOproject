@@ -54,8 +54,10 @@
 #define CFG_TLM_TOF_PERIOD_MS    500U  /* VL53L5CX refresh (~35 ms of I2C per
                                           read - keep it off the fast path)   */
 #define CFG_TLM_MCU_PERIOD_MS    500U  /* die temp / memory / CPU load        */
-#define CFG_TLM_BLE_PERIOD_MS    1000U /* compact status over BLE: 1 Hz (the
-                                          9600-baud AT link blocks ~200 ms per
-                                          notification - keep it rare)        */
+#define CFG_TLM_BLE_PERIOD_MS    100U  /* compact status over BLE: 10 Hz. At
+                                          115200 baud one MiniStatus notify
+                                          blocks ~11 ms (was ~130 ms at 9600),
+                                          so 10 Hz leaves plenty of headroom
+                                          (UART ceiling ~90 Hz).              */
 
 #endif /* APP_CONFIG_H */
