@@ -13,9 +13,11 @@
 
 /* ---- BLE module ----------------------------------------------------------
  * The custom AT-server firmware of the STM32WB5MMG (ble_module_fw_patch) runs
- * at 115200 baud. This MUST match hlpuart1.Init.BaudRate on the WB5MMG side;
- * a mismatch makes the AT link fail completely (BLE=NG). */
-#define CFG_BLE_BAUDRATE         115200U
+ * at 460800 baud. This MUST match hlpuart1.Init.BaudRate on the WB5MMG side;
+ * a mismatch makes the AT link fail completely (BLE=NG). Divisor error is
+ * WB LPUART1 -0.001% / U585 UART4 +0.064%, both well within tolerance.
+ * (1 Mbaud was tried and failed on real hardware: link went BLE=NG.) */
+#define CFG_BLE_BAUDRATE         460800U
 #define CFG_BLE_REPLY_TIMEOUT_MS 1500U
 
 /* ---- Wi-Fi module -------------------------------------------------------- */
