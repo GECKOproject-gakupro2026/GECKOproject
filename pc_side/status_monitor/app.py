@@ -8,6 +8,12 @@ Tabs:
 
 Connect via UART (ST-LINK VCP, 921600 baud), BLE (STM32WB5MMG) or Wi-Fi (TCP).
 
+Wi-Fi (TCP)選択時は「ホットスポットON」でPCのモバイルホットスポットを起動
+できる(ファーム側はこのSSID/パスワードに固定接続する設計、app_config.hの
+CFG_WIFI_SSID/CFG_WIFI_PASSWORD参照)。ボードのIPはDHCP割当で毎回変わるため、
+「ボードIP検出」でARPテーブル+TCP接続確認から自動的に見つける
+(../find_board.ps1 を利用)。
+
 Usage: python app.py
 Deps : pip install -r requirements.txt (pyserial, bleak)
 """
@@ -16,14 +22,23 @@ from __future__ import annotations
 import datetime as _dt
 import pathlib
 import queue
+import subprocess
+import threading
 import tkinter as tk
 import wave
-from tkinter import ttk
+from tkinter import messagebox, ttk
+from typing import Optional
 
 import protocol
 import transports
 
 RECORD_DIR = pathlib.Path(__file__).with_name("recordings")
+# wifi_hotspot.ps1 / find_board.ps1 は pc_side/ 直下(このファイルの1つ上の
+# 階層)にある。status_monitor/ 単体で動くツールではないため相対配置。
+PC_SIDE_DIR = pathlib.Path(__file__).resolve().parent.parent
+HOTSPOT_SCRIPT = PC_SIDE_DIR / "wifi_hotspot.ps1"
+FIND_BOARD_SCRIPT = PC_SIDE_DIR / "find_board.ps1"
+BOARD_TCP_PORT = 5000
 
 
 def list_serial_ports() -> list[str]:
@@ -32,6 +47,39 @@ def list_serial_ports() -> list[str]:
         return [p.device for p in list_ports.comports()]
     except Exception:  # noqa: BLE001
         return []
+
+
+def run_powershell(script: pathlib.Path, args: list[str]) -> tuple[bool, str]:
+    """Runs a PowerShell script and returns (success, stdout+stderr)."""
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-File", str(script), *args],
+            capture_output=True, text=True, timeout=30,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return proc.returncode == 0, out.strip()
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
+def find_board_ip(port: int = BOARD_TCP_PORT) -> Optional[str]:
+    """Scans the mobile-hotspot subnet (192.168.137.0/24) for a host with the
+    board's TCP status server open, via find_board.ps1 (ARP table + TCP
+    connect probe). Returns "ip:port" or None if not found."""
+    ok, out = run_powershell(FIND_BOARD_SCRIPT, ["-Port", str(port)])
+    if not ok:
+        return None
+    for line in out.splitlines():
+        line = line.strip()
+        # find_board.ps1 prints a PS object table; look for an IP:port token
+        # in the "Target" column output (e.g. "192.168.137.16:5000").
+        for token in line.split():
+            if token.count(".") == 3 and ":" in token:
+                host, _, port_s = token.partition(":")
+                if port_s.isdigit():
+                    return token
+    return None
 
 
 class StatusMonitorApp:
@@ -83,6 +131,13 @@ class StatusMonitorApp:
         self.target_var = tk.StringVar()
         self.target_entry = ttk.Combobox(top, textvariable=self.target_var, width=28)
         self.target_entry.pack(side="left", padx=4)
+
+        # Wi-Fi (TCP)選択時だけ出す: モバイルホットスポットの起動/停止と、
+        # ボードの実IP自動検出(DHCP割当のため固定IPでは繋がらないことがある)。
+        self.hotspot_btn = ttk.Button(top, text="ホットスポットON",
+                                      command=self._toggle_hotspot)
+        self.find_ip_btn = ttk.Button(top, text="ボードIP検出",
+                                      command=self._find_board_ip)
 
         self.connect_btn = ttk.Button(top, text="接続", command=self._toggle_connect)
         self.connect_btn.pack(side="left", padx=8)
@@ -272,6 +327,10 @@ class StatusMonitorApp:
 
     def _update_target_hint(self) -> None:
         link = self.link_var.get()
+        # Wi-Fi専用ボタン(ホットスポットON/OFF・ボードIP検出)は
+        # Wi-Fi (TCP)選択時のみ表示する。
+        self.hotspot_btn.pack_forget()
+        self.find_ip_btn.pack_forget()
         if link == "UART":
             ports = list_serial_ports()
             self.target_entry.configure(values=ports)
@@ -280,8 +339,60 @@ class StatusMonitorApp:
             self.target_entry.configure(values=["P2PSRV1", "STM32WB"])
             self.target_var.set("P2PSRV1")
         else:
-            self.target_entry.configure(values=["192.168.137.2:5000"])
-            self.target_var.set("192.168.137.2:5000")
+            self.hotspot_btn.pack(side="left", padx=2, before=self.connect_btn)
+            self.find_ip_btn.pack(side="left", padx=2, before=self.connect_btn)
+            # ボードのIPはPCのモバイルホットスポットのDHCPが割り当てるため
+            # 固定できない。「ボードIP検出」で自動的に見つける想定。
+            self.target_entry.configure(values=[f"{BOARD_TCP_PORT}"])
+            if not self.target_var.get():
+                self.target_var.set(f"192.168.137.2:{BOARD_TCP_PORT}")
+
+    # ---------------- Wi-Fi helpers (mobile hotspot + board discovery) -----
+    def _toggle_hotspot(self) -> None:
+        action = "Stop" if self.hotspot_btn["text"] == "ホットスポットOFF" else "Start"
+        self.hotspot_btn.configure(state="disabled")
+        self._log(f"モバイルホットスポットを{'起動' if action == 'Start' else '停止'}しています...")
+
+        def worker() -> None:
+            ok, out = run_powershell(HOTSPOT_SCRIPT, ["-Action", action])
+            self.root.after(0, lambda: self._on_hotspot_done(action, ok, out))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_hotspot_done(self, action: str, ok: bool, out: str) -> None:
+        self.hotspot_btn.configure(state="normal")
+        if ok:
+            self.hotspot_btn.configure(
+                text="ホットスポットOFF" if action == "Start" else "ホットスポットON")
+            self._log(f"モバイルホットスポット{'起動' if action == 'Start' else '停止'}完了: {out}")
+        else:
+            self._log(f"モバイルホットスポット操作に失敗: {out}")
+            messagebox.showerror("ホットスポット", f"操作に失敗しました:\n{out}")
+
+    def _find_board_ip(self) -> None:
+        self.find_ip_btn.configure(state="disabled")
+        self._log("ボードのIPをネットワーク上から検索しています...")
+
+        def worker() -> None:
+            target = find_board_ip()
+            self.root.after(0, lambda: self._on_find_ip_done(target))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_find_ip_done(self, target: Optional[str]) -> None:
+        self.find_ip_btn.configure(state="normal")
+        if target:
+            self.target_var.set(target)
+            self._log(f"ボードを発見: {target}")
+        else:
+            self._log("ボードが見つかりませんでした"
+                      "(モバイルホットスポットが起動しているか、ボードが接続済みか確認してください)")
+            messagebox.showwarning(
+                "ボードIP検出",
+                "ボードが見つかりませんでした。\n"
+                "・モバイルホットスポットが起動しているか\n"
+                "・ボードがWi-Fiに接続済みか(UARTログの'Wi-Fi connected'を確認)\n"
+                "を確認してください。")
 
     # ---------------- connection ----------------
     def _toggle_connect(self) -> None:
