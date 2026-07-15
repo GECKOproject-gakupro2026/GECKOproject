@@ -67,17 +67,31 @@ void bleRawProbe(const char *cmd)
 
 } // namespace
 
-bool Init()
+namespace
 {
-  /* Debug: check the module's AT dialect with raw polled exchanges
-   * (before interrupt-driven RX takes over the UART) */
+/* One AT bring-up attempt at CFG_BLE_BAUDRATE. Re-inits the UART, the AT LL
+ * glue and the client, queries BLE_TEST and waits for the reply (parsed in the
+ * RX interrupt, which sets bleLinkOk). Returns true only if the module
+ * answered. Factored out so Init() can retry it: a flaky first attempt (e.g. a
+ * garbled first byte at higher baud) often succeeds on a re-try.
+ *
+ * withProbe: only the first attempt runs the three raw AT probes - they exist
+ * purely to print the module's literal reply for debugging and each blocks up
+ * to ~700 ms, so retries skip them and just re-drive the AT client. The
+ * retry is meant to be "re-send the AT handshake a couple more times", not to
+ * repeat the full diagnostic + long waits. */
+bool bringUpOnce(bool withProbe)
+{
   huart4.Init.BaudRate = CFG_BLE_BAUDRATE;
   (void)HAL_UART_Init(&huart4);
-  bleRawProbe("AT\r\n");
-  bleRawProbe("AT+BLE_TEST?\r\n");
-  bleRawProbe("AT+BLE_SVC=1\r\n");
+  if (withProbe)
+  {
+    bleRawProbe("AT\r\n");
+    bleRawProbe("AT+BLE_TEST?\r\n");
+    bleRawProbe("AT+BLE_SVC=1\r\n");
+  }
 
-  /* BLE module: AT client over UART4 at 9600 baud.
+  /* BLE module: AT client over UART4.
    * Note: the library never calls stm32wb_at_ll_Init itself. */
   bleLinkOk = false;
   if (stm32wb_at_ll_Init() == 0U &&
@@ -86,7 +100,7 @@ bool Init()
   {
     bleGlueReady = true;
     (void)stm32wb_at_client_Query(BLE_TEST);
-    HAL_Delay(500); /* wait for the reply (parsed in RX interrupt) */
+    HAL_Delay(200); /* wait for the reply (parsed in RX interrupt) */
     if (bleLinkOk)
     {
       /* Start the P2P server application + advertising on the module */
@@ -96,6 +110,27 @@ bool Init()
     }
   }
   return bleLinkOk;
+}
+} // namespace
+
+bool Init()
+{
+  for (uint32_t attempt = 1U; attempt <= CFG_BLE_INIT_RETRIES; attempt++)
+  {
+    if (bringUpOnce(attempt == 1U))
+    {
+      if (attempt > 1U)
+      {
+        printf("[BLE] link up after %lu attempts\r\n", (unsigned long)attempt);
+      }
+      return true;
+    }
+    printf("[BLE] bring-up attempt %lu/%lu failed at %lu baud\r\n",
+           (unsigned long)attempt, (unsigned long)CFG_BLE_INIT_RETRIES,
+           (unsigned long)CFG_BLE_BAUDRATE);
+  }
+  /* Still BLE=NG after all retries: drop the baud on both sides and reflash. */
+  return false;
 }
 
 bool IsAlive() { return bleLinkOk; }
