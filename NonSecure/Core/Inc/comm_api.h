@@ -3,14 +3,15 @@
   * @file    comm_api.h
   * @brief   アプリ層(NonSecure)から通信サービスを呼ぶための唯一の窓口【契約層】。
   *
-  *          アプリ側のコードは、この7関数の実体がどう実装されているかを
+  *          アプリ側のコードは、この関数群の実体がどう実装されているかを
   *          知らなくてよい:
   *            - TrustZoneあり基板: Secure/Core/Src/secure_nsc.c のCMSEゲートウェイ
   *            - TrustZoneなし基板: portability/comm_api_direct.c の直接呼び出し
   *          どちらの場合もこのヘッダは変更しない。だからアプリ層(app_loop.c,
   *          sensors.c, ns_audio.c)は無改造で移植できる。
   *
-  *          【重要】この7関数のシグネチャと戻り値の意味は凍結。変更禁止。
+  *          【重要】既存関数(Comm_Poll〜Comm_GetAudioBuffer、7個)のシグネチャと
+  *          戻り値の意味は凍結。変更禁止。新規関数の追加は可。
   ******************************************************************************
   */
 #ifndef COMM_API_H
@@ -47,6 +48,14 @@ uint32_t Comm_GetLinkStatus(void);
 /* 通信サービス側が録っている音声窓をコピーして受け取る。
  * 戻り値: 実際にコピーされたサンプル数 */
 uint32_t Comm_GetAudioBuffer(int16_t *dst, uint32_t maxSamples);
+
+/* MCU情報(ダイ温度・電圧・クロック・Flashサイズ・UID・リセット要因・CPU負荷・
+ * RAM/Flash使用量)とble_alive, wifi_aliveを*dstに埋める(他フィールドは
+ * 変更しない)。
+ * これらの値はSecure専用リソース(内蔵ADC・Secureリンカシンボル・DBGMCU)
+ * 由来でNonSecure側に情報源が無いため、Comm_SendTelemetry()の前にこれを
+ * 呼んで埋めること。 */
+void Comm_GetMcuInfo(FullStatus_t *dst);
 
 /* 起動が成功したことを通信サービス側の起動監視に伝える。
  * これを呼ばないまま数回リセットが続くと、前のファームへ自動ロールバックされる。 */

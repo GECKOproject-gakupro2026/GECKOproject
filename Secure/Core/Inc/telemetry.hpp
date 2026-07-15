@@ -112,6 +112,16 @@ public:
    * Comm_GetLinkStatus; BLE bits are read directly from file-scope state). */
   uint32_t wifiTcpLinkBits() const;
 
+  /* Copies the MCU-info fields (die temp, VDDA, clocks, flash size, UID,
+   * reset cause, CPU load, RAM/flash usage) and ble_alive/wifi_alive out of
+   * the Secure-side status_ snapshot, which poll() keeps refreshed independently
+   * of NS-driven telemetry (see the nsTelemetryActive comment in poll()) -
+   * unlike the rest of FullStatus, these fields have no NonSecure-side
+   * source, so the NS app layer has to pull them via this getter instead of
+   * filling them itself. Only the fields below are touched; caller supplies
+   * the rest of *dst. */
+  void copyMcuStatusInto(FullStatus &dst) const;
+
 private:
   void handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
                    uint16_t len, bool fromTcp);

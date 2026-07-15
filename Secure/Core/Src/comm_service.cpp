@@ -509,6 +509,29 @@ uint32_t Service::wifiTcpLinkBits() const
   return bits;
 }
 
+void Service::copyMcuStatusInto(FullStatus &dst) const
+{
+  dst.die_temp_x100 = status_.die_temp_x100;
+  dst.vdda_mv = status_.vdda_mv;
+  dst.sysclk_hz = status_.sysclk_hz;
+  dst.hclk_hz = status_.hclk_hz;
+  dst.reset_cause = status_.reset_cause;
+  dst.cpu_load_pct = status_.cpu_load_pct;
+  dst.flash_kb = status_.flash_kb;
+  dst.uid[0] = status_.uid[0];
+  dst.uid[1] = status_.uid[1];
+  dst.uid[2] = status_.uid[2];
+  dst.idcode = status_.idcode;
+  dst.ram_used = status_.ram_used;
+  dst.ram_total = status_.ram_total;
+  dst.heap_used = status_.heap_used;
+  dst.heap_free = status_.heap_free;
+  dst.flash_used = status_.flash_used;
+  dst.flash_total = status_.flash_total;
+  dst.ble_alive = status_.ble_alive;
+  dst.wifi_alive = status_.wifi_alive;
+}
+
 void Service::poll()
 {
   /* One-shot phase profile: accumulated per second, printed once (temporary
@@ -562,6 +585,19 @@ void Service::poll()
     profUart += t2 - t1;
     profTcp += HAL_GetTick() - t2;
     profFrames++;
+  }
+  else if (nsTelemetryActive)
+  {
+    /* NS has taken over the FullStatus_t stream, so collect() (and its
+     * UART/TCP push) above is skipped - but status_'s MCU-info fields and
+     * ble_alive have no NonSecure-side source (see copyMcuStatusInto()'s
+     * doc comment), so they still need refreshing here on their own
+     * schedule for Comm_GetMcuInfo() callers to read anything but zeros.
+     * wifi_alive isn't touched here: it only ever reflects whether
+     * comm_wifi::Init() succeeded at boot (initRadio()), not a live link
+     * state, so it never needs refreshing after init. */
+    refreshSlowSensors(status_);
+    status_.ble_alive = comm_ble::IsAlive() ? 1U : 0U;
   }
   profLoops++;
   if (telemetryEnabled && static_cast<int32_t>(now - nextBleTick_) >= 0)
@@ -720,5 +756,24 @@ extern "C" uint32_t CommBridge_GetAudioBuffer(int16_t *dst, uint32_t maxSamples)
   uint32_t n = (maxSamples < total) ? maxSamples : total;
   memcpy(dst, audio_capture::Buffer(), n * sizeof(int16_t));
   return n;
+}
+
+extern "C" void CommBridge_GetMcuInfo(FullStatus_t *dst)
+{
+  /* dst is a Secure-local buffer here (the CMSE gateway validated the
+   * NonSecure origin and copied it in). Only overwrite the MCU-info fields
+   * and ble_alive/wifi_alive - see telemetry::Service::copyMcuStatusInto()'s
+   * doc comment for why the NS app needs this instead of filling the fields
+   * itself. */
+  if (telemetry::g_service == nullptr)
+  {
+    return;
+  }
+  static_assert(sizeof(FullStatus_t) == sizeof(telemetry::FullStatus),
+               "FullStatus_t / telemetry::FullStatus must stay byte-identical");
+  telemetry::FullStatus local;
+  memcpy(&local, dst, sizeof(local));
+  telemetry::g_service->copyMcuStatusInto(local);
+  memcpy(dst, &local, sizeof(local));
 }
 

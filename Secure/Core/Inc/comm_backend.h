@@ -3,10 +3,10 @@
   * @file    comm_backend.h
   * @brief   通信サービスの移植境界【契約層】。
   *
-  *          ここに宣言された7関数が、アプリ層と通信サービスの間の唯一の接点。
+  *          ここに宣言された関数が、アプリ層と通信サービスの間の唯一の接点。
   *          実装は comm_service.cpp にある。
   *
-  *          アプリ層(NonSecure)からは、この7関数を直接は呼ばない。必ず
+  *          アプリ層(NonSecure)からは、これらの関数を直接は呼ばない。必ず
   *          アダプタ層を経由する:
   *
   *            TrustZoneあり基板:
@@ -23,7 +23,8 @@
   *          Secureローカルへコピーしてから渡している。この保証を弱めてはならない
   *          (OTAの信頼ルートがこの境界の内側で完結していることが安全性の根拠)。
   *
-  *          【凍結】この7関数のシグネチャと戻り値の意味は変更禁止。
+  *          【凍結】既存関数(CommBridge_Poll〜CommBridge_GetAudioBuffer、
+  *          7個)のシグネチャと戻り値の意味は変更禁止。新規関数の追加は可。
   ******************************************************************************
   */
 #ifndef COMM_BACKEND_H
@@ -56,6 +57,14 @@ uint32_t CommBridge_GetLinkStatus(void);
 
 /* 音声窓をコピーする。戻り値: コピーしたサンプル数 */
 uint32_t CommBridge_GetAudioBuffer(int16_t *dst, uint32_t maxSamples);
+
+/* dstのうちMCU情報フィールド(die_temp, vdda, sysclk, hclk, reset_cause,
+ * cpu_load, flash_kb, uid, idcode, ram_used, ram_total, heap_used,
+ * heap_free, flash_used, flash_total)とble_alive, wifi_aliveだけを
+ * 上書きする。
+ * 他フィールドは呼び出し元の値のまま。NonSecure側にこれらの値のソースが
+ * 無いための専用ゲートウェイ。 */
+void CommBridge_GetMcuInfo(FullStatus_t *dst);
 
 /* 起動成功を起動監視(BootGuard)に伝える。実装は boot_guard.cpp */
 void BootGuard_ConfirmBoot(void);

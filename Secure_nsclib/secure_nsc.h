@@ -83,6 +83,15 @@ uint32_t Comm_GetLinkStatus(void);
  * the AI inference input - audio capture itself stays Secure (Phase D). */
 uint32_t Comm_GetAudioBuffer(int16_t *dst, uint32_t maxSamples);
 
+/* Fills the MCU-info fields (die temp, VDDA, sysclk/hclk, flash size, UID,
+ * reset cause, CPU load, RAM/flash usage) and ble_alive/wifi_alive into
+ * *dst, leaving every other field untouched. These fields have no
+ * NonSecure-side source (they come from Secure-only resources: internal
+ * ADC, Secure linker symbols, DBGMCU->IDCODE), so the NS app layer must
+ * pull them via this gateway instead of filling them itself before calling
+ * Comm_SendTelemetry. */
+void Comm_GetMcuInfo(FullStatus_t *dst);
+
 #endif /* SECURE_NSC_H */
 /* USER CODE END Non_Secure_CallLib_h */
 

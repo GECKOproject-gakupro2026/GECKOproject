@@ -167,6 +167,25 @@ CMSE_NS_ENTRY uint32_t Comm_GetAudioBuffer(int16_t *dst, uint32_t maxSamples)
 }
 
 /**
+  * @brief  Fills the MCU-info fields (die temp, VDDA, clocks, flash size,
+  *         UID, reset cause, CPU load, RAM/flash usage) and ble_alive into
+  *         a NonSecure-owned FullStatus_t, leaving every other field
+  *         untouched. See CommBridge_GetMcuInfo()'s doc comment.
+  */
+CMSE_NS_ENTRY void Comm_GetMcuInfo(FullStatus_t *dst)
+{
+  if (cmse_check_address_range(dst, sizeof(FullStatus_t),
+                               CMSE_NONSECURE | CMSE_MPU_READWRITE) == NULL)
+  {
+    return;
+  }
+  FullStatus_t local;
+  memcpy(&local, dst, sizeof(local));
+  CommBridge_GetMcuInfo(&local);
+  memcpy(dst, &local, sizeof(local));
+}
+
+/**
   * @}
   */
 

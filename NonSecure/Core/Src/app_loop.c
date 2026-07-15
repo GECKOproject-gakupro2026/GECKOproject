@@ -26,11 +26,16 @@
  * service via Comm_Poll() and submits a telemetry snapshot through the
  * Comm_SendTelemetry() NSC gateway. env/motion/light/ToF sensors (I2C1/I2C2)
  * and audio (RMS/waveform, read from the Secure capture buffer) are read
- * here on every call, in both ACTIVE and IDLE. */
+ * here on every call, in both ACTIVE and IDLE. MCU info (die temp/vdda/
+ * clocks/flash size/UID/reset cause/CPU load/RAM+flash usage) and
+ * ble_alive/wifi_alive come from Secure-only resources with no
+ * NonSecure-side source, so they're pulled via the Comm_GetMcuInfo gateway
+ * instead of being filled here. */
 static void build_status(FullStatus_t *st)
 {
   Sensors_Refresh(st);
   Audio_Refresh(st);
+  Comm_GetMcuInfo(st);
   st->ver = 2U;
   st->uptime_ms = HAL_GetTick();
   st->button = Board_ButtonRead();

@@ -72,6 +72,16 @@ uint32_t Comm_GetAudioBuffer(int16_t *dst, uint32_t maxSamples)
   return CommBridge_GetAudioBuffer(dst, maxSamples);
 }
 
+void Comm_GetMcuInfo(FullStatus_t *dst)
+{
+  if (dst == NULL)
+  {
+    return;
+  }
+  /* TrustZoneなし: 同一メモリ空間なので、検証もローカルコピーも不要。 */
+  CommBridge_GetMcuInfo(dst);
+}
+
 void Secure_ConfirmBoot(void)
 {
   BootGuard_ConfirmBoot();
