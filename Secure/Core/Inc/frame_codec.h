@@ -43,6 +43,9 @@ extern "C" {
 #define FRAME_CMD_TIME_SYNC    0x0EU   /* PC->board: u32 Unix epoch seconds   */
 #define FRAME_CMD_ENTER_COMM   0x0FU   /* PC->board: explicit IDLE->ACTIVE wake */
 #define FRAME_CMD_STOP_COMM    0x10U   /* PC->board: explicit ACTIVE->IDLE hint */
+#define FRAME_CMD_LOG_REQ      0x11U   /* PC->board: u32 startIndex (paged log read) */
+#define FRAME_CMD_LOG_RESP     0x12U   /* board->PC: u32 startIndex + u16 count + records */
+#define FRAME_CMD_LOG_RESET    0x13U   /* PC->board: erase the non-volatile state log */
 #define FRAME_CMD_ACK          0x7EU   /* {orig_cmd, orig_seq, u32 arg}      */
 #define FRAME_CMD_NACK         0x7FU   /* {orig_cmd, orig_seq, u8 error}     */
 

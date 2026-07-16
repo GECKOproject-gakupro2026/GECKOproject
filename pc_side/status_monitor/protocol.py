@@ -30,12 +30,36 @@ CMD_LINK_STANDBY = 0x0D # PC->board: end/idle the sending link
 CMD_TIME_SYNC = 0x0E    # PC->board: u32 Unix epoch seconds (LE)
 CMD_ENTER_COMM = 0x0F   # PC->board: explicit IDLE->ACTIVE wake request
 CMD_STOP_COMM = 0x10    # PC->board: explicit ACTIVE->IDLE hint
+CMD_LOG_REQ = 0x11      # PC->board: u32 startIndex LE (paged non-volatile log read)
+CMD_LOG_RESP = 0x12     # board->PC: u32 startIndex + u16 count + count x LOG_RECORD_FMT
+CMD_LOG_RESET = 0x13    # PC->board: erase the non-volatile state log
 CMD_ACK = 0x7E          # "<BBI" orig_cmd/orig_seq/arg
 CMD_NACK = 0x7F         # "<BBB" orig_cmd/orig_seq/error
 
 NACK_ERRORS = {1: "BAD_OFFSET", 2: "ERASE", 3: "WRITE", 4: "VERIFY",
                5: "TOO_LARGE", 6: "BAD_STATE"}
 OTA_STATES = {0: "Idle", 1: "Receiving", 2: "Staged", 3: "Error"}
+
+# state_log.hpp / nvm_log.hpp の Record (packed, 13 bytes) と一致させる。
+LOG_RECORD_FMT = "<IIBI"
+LOG_RECORD_SIZE = struct.calcsize(LOG_RECORD_FMT)  # 13
+LOG_EVENT_NAMES = {
+    0: "None", 1: "BleActive", 2: "BleIdle", 3: "TcpActive", 4: "TcpIdle",
+    5: "UartActive", 6: "UartIdle", 7: "LinkStandby", 8: "CommReturn",
+    9: "DeviceActive", 10: "DeviceIdle", 11: "EnterComm", 12: "StopComm",
+}
+
+
+def decode_log_resp(payload: bytes) -> tuple[int, list[tuple]]:
+    """CMD_LOG_RESP payload -> (startIndex, [(tick_ms, wall_ms, event, ret_val), ...])."""
+    start_index = struct.unpack("<I", payload[:4])[0]
+    count = struct.unpack("<H", payload[4:6])[0]
+    records = []
+    off = 6
+    for _ in range(count):
+        records.append(struct.unpack(LOG_RECORD_FMT, payload[off:off + LOG_RECORD_SIZE]))
+        off += LOG_RECORD_SIZE
+    return start_index, records
 
 FULL_FMT = "<BBIhHI3h3h3hIHBhh32hBB6I"
 FULL_SIZE = struct.calcsize(FULL_FMT)  # 133 (v1)

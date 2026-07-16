@@ -35,6 +35,12 @@ void Push(Event ev, uint32_t retVal)
   count_++;
 }
 
+void Reset()
+{
+  head_ = 0U;
+  count_ = 0U;
+}
+
 uint32_t Count() { return count_; }
 
 uint32_t Size() { return (count_ < kCapacity) ? count_ : kCapacity; }

@@ -108,6 +108,10 @@ class StatusMonitorApp:
         self.ble_rec_chunks: dict[int, bytes] = {}
         self.last_wav: pathlib.Path | None = None
 
+        # Step D2: non-volatile state log (fetched page-by-page via LOG_REQ).
+        self.log_records: list[tuple] = []
+        self.log_fetch_next = 0
+
         # Phase E low-power support: the firmware idles (stops telemetry, slow-
         # blinks its red LED) after ~3 s with no host traffic. Keep it awake by
         # sending a lightweight keep-alive byte each second while "keep awake"
@@ -161,6 +165,10 @@ class StatusMonitorApp:
         ttk.Button(top, text="時刻同期", command=self._sync_time).pack(side="left", padx=4)
         # 待機: アクティブなリンクをIDLEへ落とす(LINK_STANDBY)。
         ttk.Button(top, text="待機", command=self._send_standby).pack(side="left", padx=4)
+        # 不揮発状態ログ(Step D2): 取得/保存/リセット。
+        ttk.Button(top, text="ログ取得", command=self._fetch_log).pack(side="left", padx=4)
+        ttk.Button(top, text="ログ保存", command=self._save_log).pack(side="left", padx=4)
+        ttk.Button(top, text="ログリセット", command=self._reset_log).pack(side="left", padx=4)
 
         self.rate_var = tk.StringVar(value="0 fps")
         ttk.Label(top, textvariable=self.rate_var).pack(side="right")
@@ -505,6 +513,61 @@ class StatusMonitorApp:
         frame = protocol.build_frame(protocol.CMD_STOP_COMM, 0)
         self.transport.write(frame)
 
+    # ---------------- non-volatile state log (Step D2) ----------------
+    def _fetch_log(self) -> None:
+        """不揮発状態ログ(NOR)をLOG_REQのページングで全件取得する。"""
+        if self.transport is None:
+            self._log("ログ取得: 未接続")
+            return
+        self.log_records = []
+        self.log_fetch_next = 0
+        self._log("ログ取得を開始...")
+        self._request_log_page(0)
+
+    def _request_log_page(self, start_index: int) -> None:
+        if self.transport is None:
+            return
+        frame = protocol.build_frame(protocol.CMD_LOG_REQ, 0, struct.pack("<I", start_index))
+        self.transport.write(frame)
+
+    def _on_log_resp(self, body: bytes) -> None:
+        start_index, records = protocol.decode_log_resp(body)
+        self.log_records.extend(records)
+        if not records:
+            self._log(f"ログ取得完了: {len(self.log_records)}件")
+            return
+        self.log_fetch_next = start_index + len(records)
+        self._request_log_page(self.log_fetch_next)
+
+    def _save_log(self) -> None:
+        """取得済みの不揮発ログを.txtへ保存する(_save_wavのRECORD_DIRパターン)。"""
+        import time as _time
+        records = self.log_records
+        if not records:
+            self._log("ログ保存: 取得済みのログがありません(先に取得してください)")
+            return
+        RECORD_DIR.mkdir(parents=True, exist_ok=True)
+        path = RECORD_DIR / _time.strftime("state_log_%Y%m%d_%H%M%S.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("index\ttick_ms\twall_ms\tevent\tret_val\n")
+            for i, (tick_ms, wall_ms, event, ret_val) in enumerate(records):
+                name = protocol.LOG_EVENT_NAMES.get(event, str(event))
+                f.write(f"{i}\t{tick_ms}\t{wall_ms}\t{name}\t{ret_val}\n")
+        self._log(f"ログ保存: {path}")
+
+    def _reset_log(self) -> None:
+        if self.transport is None:
+            self._log("ログリセット: 未接続")
+            return
+        if not messagebox.askyesno("ログリセット", "不揮発状態ログを全消去します。よろしいですか?"):
+            return
+        frame = protocol.build_frame(protocol.CMD_LOG_RESET, 0)
+        if self.transport.write(frame):
+            self._log("ログリセットを送信")
+            self.log_records = []
+        else:
+            self._log("ログリセット: この接続方式では送信できません")
+
     # ---------------- audio controls ----------------
     def _set_stream(self, enable: bool) -> None:
         if self.transport is None:
@@ -642,6 +705,16 @@ class StatusMonitorApp:
                             if self.recording:
                                 self.record_samples.extend(samples)
                             audio_dirty = True
+                            continue
+                        if cmd == protocol.CMD_LOG_RESP:
+                            self._on_log_resp(body)
+                            continue
+                        if cmd == protocol.CMD_ACK:
+                            continue  # 個別のコマンド成功応答(現状は無視でよい)
+                        if cmd == protocol.CMD_NACK:
+                            orig_cmd, orig_seq, err = struct.unpack("<BBB", body[:3])
+                            name = protocol.NACK_ERRORS.get(err, str(err))
+                            self._log(f"NACK: cmd=0x{orig_cmd:02X} seq={orig_seq} err={name}")
                             continue
                         status = protocol.decode_status(cmd, body)
                         if status is not None:

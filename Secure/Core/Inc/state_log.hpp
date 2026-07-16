@@ -55,6 +55,9 @@ constexpr uint32_t kCapacity = 64U;
 /* 1イベントを記録する。満杯なら最古を上書き(リング)。ISRからは呼ばない。 */
 void Push(Event ev, uint32_t retVal);
 
+/* リングを空にする(D2のLOG_RESETコマンド用)。Count()も0に戻る。 */
+void Reset();
+
 /* これまでに記録した総イベント数(オーバーフローで上書きされた分も含む累積)。 */
 uint32_t Count();
 

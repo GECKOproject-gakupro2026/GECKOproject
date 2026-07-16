@@ -201,6 +201,30 @@ U585 workspace = $env:TEMP\claude\hws   (Secure: "B-U585I-IOT02A_Secure/Debug",
 - **検証**: 状態遷移を数回起こしてから電源リセットし、ログが失われず残っていることを確認。
 - **コミット**: `feat(log): persist the state log to free OSPI NOR with drop-oldest subsector rotation`
 
+> **進捗(2026-07-17)**: 実装・実機デバッグ済み、**一部未解決**。
+> - 実装は完了(`nvm_log.hpp`/`.cpp`、`state_log::Reset()` 追加、`Service::poll()` 先頭で
+>   `nvm_log::Poll()` を毎回呼ぶ)。
+> - **実機で重大バグを発見・修正済み**: 消去完了直後に同一`Poll()`フロー内で
+>   `offsetInSubsector(absIndex)==0` の判定へ再度合致し、書き込み前に無限に同じ
+>   サブセクタを消去し直し続け、**レコードが一件も書き込まれない**状態になっていた
+>   (診断printfを5往復入れて実機ログから確定。`waitLoops`が数十万まで増え続け、
+>   `Erase_Block`呼び出しが実際には10回以上繰り返されていたことを確認)。
+>   `lastErasedSubsectorPlus1_` で「直前に消去済みのサブセクタ」を記憶し、
+>   再消去をスキップするよう修正。修正後、`LOG_REQ`で取得すると記録が正しく増える
+>   ことを確認(リセットなしの連続動作で37件→43件と増加を確認)。
+> - **未解決**: `STM32_Programmer_CLI -rst` 後にログが0件に戻る(永続化されていない)。
+>   `TAMP->BKP1R`はVBATドメインでウォームリセットでは保持されるはずだが、実機では
+>   リセット後 `Count()`(=`headIndex()`)が0を返す。次回調査すべき候補:
+>   (a) `-rst`がVBATドメインまでクリアする種類のリセットである可能性(BootGuardの
+>   `TAMP->BKP0R`は別件で正常動作しているとの記録があるため要再確認)、
+>   (b) NORへの実書き込み自体はできていてもリセット後の読み出しアドレス計算に
+>   問題がある可能性(`Get()`のoldestAbs計算、またはOSPI再初期化後のメモリマップド
+>   読み出しタイミング)。**次にこのStepへ戻るAIは、まずBKP1Rが本当に生き残るか
+>   単体で確認してから(例: リセット直後に`Count()`だけを読むテスト)、NOR読み出し側を
+>   疑うこと。**
+> - Step D2(下記)はUART送受信経路・app.py側は実装済みで、電源を切らない
+>   連続動作でのログ取得・保存は動作確認済み。リセット跨ぎの永続性のみ未検証/不具合。
+
 ### Step D2: app.pyからログ取得・保存・リセット
 - **対象**: `Secure/Core/Inc/frame_codec.h` / `pc_side/status_monitor/protocol.py` に
   `FRAME_CMD_LOG_REQ`(例0x11)/`FRAME_CMD_LOG_RESP`(例0x12)/`FRAME_CMD_LOG_RESET`
@@ -215,6 +239,14 @@ U585 workspace = $env:TEMP\claude\hws   (Secure: "B-U585I-IOT02A_Secure/Debug",
 - **検証**: ログ取得ボタン押下でボードから最新ログが降ってきて `.txt` に保存されること、
   リセットボタンでボード側ログがクリアされ次回取得が空であること。
 - **コミット**: `feat(ui): fetch, save and reset the board's non-volatile state log from the app`
+
+> **進捗(2026-07-17)**: 実装済み。`FRAME_CMD_LOG_REQ/RESP/RESET`(0x11/0x12/0x13)を
+> `frame_codec.h`/`protocol.py`に同一追加、`handleFrame`にページング応答(1ページ64件、
+> `sendResponse`の64B固定バッファとは別の専用送信パスを使用)を実装。app.pyに
+> `_poll_queue`のACK/NACK/LOG_RESP分岐、ログ取得/保存/リセットの3ボタンを追加。
+> 電源を切らない連続動作での取得・保存は実機確認済み(37→43件の増加をLOG_REQで確認)。
+> リセットボタン自体の実機確認は未実施(Step D1のリセット跨ぎ永続化バグの調査を
+> 優先したため)。
 
 ---
 

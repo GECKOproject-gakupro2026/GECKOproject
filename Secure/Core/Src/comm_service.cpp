@@ -34,6 +34,7 @@
 
 #include "audio_capture.hpp"
 #include "comm_ble.hpp"
+#include "nvm_log.hpp"
 #include "state_log.hpp"
 #include "comm_uart.hpp"
 #include "comm_wifi.hpp"
@@ -486,6 +487,70 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
                    reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
       break;
     }
+    case FRAME_CMD_LOG_REQ:
+    {
+      /* payload = u32 startIndex (LE). Responds with a page of up to
+       * kLogPageRecords non-volatile log records starting at startIndex, so
+       * the PC can walk the whole log (nvm_log::Size() can be in the
+       * thousands) across several requests without exceeding
+       * FRAME_MAX_PAYLOAD. Uses its own send buffer (not sendResponse's 64B
+       * one, which only ever needs to fit ACK/NACK/STATUS_RESP). */
+      if (len < 4U)
+      {
+        NackPayload nack = {cmd, seq, FRAME_ERR_BAD_STATE};
+        sendResponse(fromTcp, FRAME_CMD_NACK,
+                     reinterpret_cast<const uint8_t *>(&nack), sizeof(nack));
+        break;
+      }
+      uint32_t startIndex = static_cast<uint32_t>(payload[0]) |
+                            (static_cast<uint32_t>(payload[1]) << 8) |
+                            (static_cast<uint32_t>(payload[2]) << 16) |
+                            (static_cast<uint32_t>(payload[3]) << 24);
+      constexpr uint32_t kLogPageRecords = 64U;
+      struct __attribute__((packed)) LogRespHeader
+      {
+        uint32_t startIndex;
+        uint16_t count;
+      };
+      uint8_t body[sizeof(LogRespHeader) + kLogPageRecords * sizeof(nvm_log::Record)];
+      LogRespHeader hdr = {startIndex, 0U};
+      uint32_t total = nvm_log::Size();
+      while (hdr.count < kLogPageRecords && (startIndex + hdr.count) < total)
+      {
+        nvm_log::Record rec;
+        if (!nvm_log::Get(startIndex + hdr.count, rec))
+        {
+          break;
+        }
+        memcpy(&body[sizeof(LogRespHeader) + hdr.count * sizeof(rec)], &rec, sizeof(rec));
+        hdr.count++;
+      }
+      memcpy(body, &hdr, sizeof(hdr));
+      uint16_t bodyLen = static_cast<uint16_t>(sizeof(LogRespHeader) +
+                                               hdr.count * sizeof(nvm_log::Record));
+      uint8_t frame[sizeof(body) + FRAME_OVERHEAD];
+      size_t n = Frame_Encode(FRAME_CMD_LOG_RESP, respSeq++, body, bodyLen, frame, sizeof(frame));
+      if (n > 0U)
+      {
+        if (fromTcp)
+        {
+          comm_wifi::SendRaw(frame, static_cast<int32_t>(n));
+        }
+        else
+        {
+          (void)comm_uart::SendAsync(frame, n, 20);
+        }
+      }
+      break;
+    }
+    case FRAME_CMD_LOG_RESET:
+    {
+      nvm_log::Reset();
+      AckPayload ack = {cmd, seq, 0U};
+      sendResponse(fromTcp, FRAME_CMD_ACK,
+                   reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
+      break;
+    }
     case FRAME_CMD_TIME_SYNC:
     {
       /* PC sends the current Unix epoch (u32 seconds, LE). There is no RTC on
@@ -644,6 +709,10 @@ void Service::poll()
   static uint32_t profCollect = 0, profUart = 0, profBle = 0, profTcp = 0;
   static uint32_t profStart = 0, profPrints = 0;
   static uint32_t profFrames = 0, profLoops = 0;
+
+  /* Step D1: at most one NOR write (or one non-blocking erase-status check)
+   * per poll() - never blocks, see nvm_log.hpp for why. */
+  nvm_log::Poll();
 
   if (nsDriven)
   {
