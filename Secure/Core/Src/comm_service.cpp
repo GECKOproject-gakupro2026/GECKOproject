@@ -34,6 +34,7 @@
 
 #include "audio_capture.hpp"
 #include "comm_ble.hpp"
+#include "state_log.hpp"
 #include "comm_uart.hpp"
 #include "comm_wifi.hpp"
 #include "mcu_info.hpp"
@@ -440,6 +441,7 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
       {
         uartLink_.state = LinkState::Idle;
       }
+      state_log::Push(state_log::Event::LinkStandby, fromTcp ? 1U : 0U);
       AckPayload ack = {cmd, seq, 0U};
       sendResponse(fromTcp, FRAME_CMD_ACK,
                    reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
@@ -585,6 +587,10 @@ void Service::poll()
     if (key >= 0)
     {
       (void)processRxByte(static_cast<uint8_t>(key), false);
+      if (uartLink_.state != LinkState::Active)
+      {
+        state_log::Push(state_log::Event::UartActive, 0U);
+      }
       uartLink_.state = LinkState::Active;
       uartLink_.lastActivityMs = HAL_GetTick();
     }
@@ -599,20 +605,35 @@ void Service::poll()
    * exclusivity). UART is DMA-driven and always allowed to interrupt, so it
    * is never gated on the other links - it only reports its own state. */
   constexpr uint32_t kLinkIdleMs = 3000U;
+  LinkState blePrev = bleLink_.state;
   bleLink_.state = comm_ble::IsConnected() ? LinkState::Active : LinkState::Idle;
   if (bleLink_.state == LinkState::Active)
   {
     bleLink_.lastActivityMs = now;
   }
+  if (bleLink_.state != blePrev)
+  {
+    state_log::Push(bleLink_.state == LinkState::Active ? state_log::Event::BleActive
+                                                        : state_log::Event::BleIdle,
+                    0U);
+  }
+  LinkState tcpPrev = tcpLink_.state;
   tcpLink_.state = comm_wifi::HasClient() ? LinkState::Active : LinkState::Idle;
   if (tcpLink_.state == LinkState::Active)
   {
     tcpLink_.lastActivityMs = now;
   }
+  if (tcpLink_.state != tcpPrev)
+  {
+    state_log::Push(tcpLink_.state == LinkState::Active ? state_log::Event::TcpActive
+                                                        : state_log::Event::TcpIdle,
+                    0U);
+  }
   if (uartLink_.state == LinkState::Active &&
       static_cast<int32_t>(now - uartLink_.lastActivityMs) >= (int32_t)kLinkIdleMs)
   {
     uartLink_.state = LinkState::Idle;
+    state_log::Push(state_log::Event::UartIdle, 0U);
   }
   /* Once the NonSecure app has submitted at least one status via
    * Comm_SendTelemetry(), Secure stops producing/pushing its own status on
@@ -692,7 +713,14 @@ void Service::poll()
     nextBleTick_ += kBlePeriodMs;
     uint32_t t0 = HAL_GetTick();
     comm_ble::SendStatus(status_);
-    profBle += HAL_GetTick() - t0;
+    uint32_t dt = HAL_GetTick() - t0;
+    profBle += dt;
+    /* Record the BLE comm-cycle return time/duration. Step 7's NonSecure
+     * cadence scheduler and log read-out use this to keep PC arrival steady. */
+    if (bleLink_.state == LinkState::Active)
+    {
+      state_log::Push(state_log::Event::CommReturn, dt);
+    }
   }
   if (telemetryEnabled)
   {
@@ -738,6 +766,29 @@ void Service::poll()
     profCollect = profUart = profBle = profTcp = 0;
     profFrames = profLoops = 0;
     profStart = now;
+  }
+
+  /* Periodic state-log dump (every ~3 s, standing - not capped like PROF) so
+   * the SRAM ring is observable over the console. Diagnostic only; the ring
+   * itself records continuously regardless of this print. */
+  static uint32_t nextSlogTick = 0;
+  if (static_cast<int32_t>(now - nextSlogTick) >= 0)
+  {
+    nextSlogTick = now + 3000U;
+    uint32_t sz = state_log::Size();
+    uint32_t from = (sz > 6U) ? (sz - 6U) : 0U;
+    printf("[SLOG] count=%lu size=%lu:", (unsigned long)state_log::Count(),
+           (unsigned long)sz);
+    for (uint32_t i = from; i < sz; i++)
+    {
+      state_log::Record rec;
+      if (state_log::Get(i, rec))
+      {
+        printf(" [t=%lu ev=%u ret=%lu]", (unsigned long)rec.tick_ms,
+               (unsigned)rec.event, (unsigned long)rec.ret_val);
+      }
+    }
+    printf("\r\n");
   }
 
   /* PCM streaming: feed each ready buffer half into the pitch-correction
