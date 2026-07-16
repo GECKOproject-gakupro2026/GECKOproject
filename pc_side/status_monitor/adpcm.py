@@ -68,3 +68,30 @@ def decode_block(block: bytes) -> list[int]:
         predictor, step_index = _decode_nibble(predictor, step_index, (byte >> 4) & 0x0F)
         samples.append(predictor)
     return samples
+
+
+# The board (Secure/Core/Src/recorder.cpp) encodes one self-contained ADPCM
+# block per FeedPcm() call, and FeedPcm is always fed exactly BLOCK_SAMPLES
+# samples (poll() pops 512-sample resampled frames), so every block is
+# BLOCK_HEADER_SIZE + BLOCK_SAMPLES/2 = 260 bytes -- except the final block,
+# which may be short. Over BLE the byte stream is sliced into fixed 58-byte
+# REC_CHUNKs that do NOT align to these 260-byte blocks; concatenating the
+# chunks in seq order reproduces the exact block stream, which this walks.
+BLOCK_SAMPLES = 512
+BLOCK_SIZE = BLOCK_HEADER_SIZE + BLOCK_SAMPLES // 2  # 260
+
+
+def decode_stream(data: bytes) -> list[int]:
+    """Decodes a contiguous concatenation of ADPCM blocks (the reassembled
+    REC_CHUNK stream) into PCM int16 samples. Walks fixed BLOCK_SIZE blocks;
+    the trailing block may be shorter (final partial FeedPcm). Each block is
+    self-seeding from its own 4-byte header, so this is robust to where the
+    blocks fall relative to the (irrelevant) BLE chunk boundaries."""
+    samples: list[int] = []
+    off = 0
+    n = len(data)
+    while off + BLOCK_HEADER_SIZE <= n:
+        block = data[off:off + BLOCK_SIZE]
+        samples.extend(decode_block(block))
+        off += len(block)
+    return samples

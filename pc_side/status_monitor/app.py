@@ -560,9 +560,14 @@ class StatusMonitorApp:
             self._on_ble_rec_end(total_samples)
 
     def _on_ble_rec_end(self, total_samples: int) -> None:
-        samples: list[int] = []
-        for seq in sorted(self.ble_rec_chunks):
-            samples.extend(adpcm.decode_block(self.ble_rec_chunks[seq]))
+        # REC_CHUNKs carry a byte-transparent slice of the board's ADPCM ring;
+        # they do NOT align to ADPCM block boundaries. Concatenate them in seq
+        # order to rebuild the exact block stream, then decode it continuously
+        # (adpcm.decode_stream) - decoding each 58-byte chunk on its own would
+        # reseed the predictor from audio bytes and produce loud noise.
+        stream = b"".join(self.ble_rec_chunks[seq]
+                          for seq in sorted(self.ble_rec_chunks))
+        samples = adpcm.decode_stream(stream)
         self.ble_rec_chunks = {}
         if len(samples) != total_samples:
             self._log(f"BLE録音: サンプル数不一致 got={len(samples)} expected={total_samples}")
