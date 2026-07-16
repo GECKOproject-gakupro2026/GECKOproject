@@ -14,51 +14,27 @@
 #include "app_loop.h"
 
 #include "app_config.h"
-#include "board_io.h"
+#include "app_state.h"
 #include "comm_api.h"
-#include "ns_audio.h"
-#include "sensors.h"
 #include "triggers.h"
 
 #include "main.h"   /* HAL_GetTick */
 
-/* NonSecure is the application layer's main loop. It pumps the Secure comm
- * service via Comm_Poll() and submits a telemetry snapshot through the
- * Comm_SendTelemetry() NSC gateway. env/motion/light/ToF sensors (I2C1/I2C2)
- * and audio (RMS/waveform, read from the Secure capture buffer) are read
- * here on every call, in both ACTIVE and IDLE. MCU info (die temp/vdda/
- * clocks/flash size/UID/reset cause/CPU load/RAM+flash usage) and
- * ble_alive/wifi_alive come from Secure-only resources with no
- * NonSecure-side source, so they're pulled via the Comm_GetMcuInfo gateway
- * instead of being filled here. */
-static void build_status(FullStatus_t *st)
-{
-  Sensors_Refresh(st);
-  Audio_Refresh(st);
-  Comm_GetMcuInfo(st);
-  st->ver = 2U;
-  st->uptime_ms = HAL_GetTick();
-  st->button = Board_ButtonRead();
-}
-
-/* ACTIVE/IDLE state machine, redefined around "IDLE = waiting for a
- * trigger" rather than "IDLE = shut everything down". Only ToF (the one
- * sensor with meaningful power draw) is put to sleep in IDLE; telemetry,
- * BLE and TCP stay live at a slower cadence so the comm stack never goes
- * quiet. This matters: quieting the comm stack via
- * Comm_SetTelemetryEnabled(0) used to also skip Service::pollTcp() on the
- * Secure side, and pollTcp()'s blocking MX_WIFI_Socket_accept() (hundreds
- * of ms to ~10s with no client) then starved Console_GetChar() of CPU time
- * to drain the wake byte - the board could enter IDLE but never leave it
- * (see docs/refactoring/既知の問題_IDLE復帰の間欠的不安定性.md). Never calling
- * Comm_SetTelemetryEnabled(0) removes that failure mode entirely. */
+/* NonSecure is the application layer's main loop. The device-level state
+ * machine (IDLE / ACTIVE with its ACQUIRE/COMM sub-cycle) now lives in
+ * app_state.c; App_Run is a thin driver that pumps the Secure comm service
+ * via Comm_Poll() and steps the state machine each iteration.
+ *
+ * IDLE stays "waiting for a trigger" rather than "shut everything down": only
+ * ToF (the one power-hungry sensor) sleeps; telemetry/BLE/TCP keep running at
+ * a slower cadence so the comm stack never goes quiet (never call
+ * Comm_SetTelemetryEnabled(0) - see the IDLE-lockup note in app_state.c's
+ * history / docs). The idle-entry guard also checks the live link status so
+ * the board won't idle while a BLE/TCP link is up. */
 void App_Run(void)
 {
-  enum { MODE_ACTIVE = 0, MODE_IDLE = 1 } mode = MODE_ACTIVE;
-  uint32_t lastActivityMs = HAL_GetTick(); /* start ACTIVE, not instantly idle */
-  uint32_t nextTelemetryTick = 0U;
-  uint32_t nextLedTick = 0U;
-  static FullStatus_t st; /* holds the latest snapshot for Trigger_Poll() too */
+  static AppStateCtx_t ctx; /* static: large-ish, and lives for the whole run */
+  AppState_Init(&ctx, HAL_GetTick());
 
   Trigger_SetLightThreshold(CFG_TRIGGER_LIGHT_THRESHOLD);
   Trigger_SetAudioThreshold(CFG_TRIGGER_AUDIO_THRESHOLD);
@@ -66,66 +42,6 @@ void App_Run(void)
   while (1)
   {
     Comm_Poll(); /* pumps the Secure comm service (TCP/OTA/BLE/audio) */
-
-    uint32_t now = HAL_GetTick();
-
-    /* Poll every trigger source every loop (even in IDLE) - this is the
-     * wake source. TRIG_COMM covers any inbound host traffic (UART/BLE/TCP,
-     * including OTA bytes); TRIG_LIGHT/TRIG_AUDIO fire once their thresholds
-     * are configured (see triggers.h), using the last telemetry snapshot. */
-    if (Trigger_Poll(&st) != TRIG_NONE)
-    {
-      lastActivityMs = now;
-    }
-
-    if (mode == MODE_ACTIVE)
-    {
-      if ((int32_t)(now - lastActivityMs) >= (int32_t)CFG_IDLE_TIMEOUT_MS)
-      {
-        /* Enter IDLE: only ToF (the power-hungry sensor) sleeps. Telemetry,
-         * BLE and TCP keep running at the slower IDLE cadence below. */
-        mode = MODE_IDLE;
-        Sensors_Stop();
-        Board_LedGreenOff();
-        Board_LedRedOff();
-        nextLedTick = now;
-        nextTelemetryTick = now;
-      }
-      else if ((int32_t)(now - nextLedTick) >= 0)
-      {
-        nextLedTick = now + CFG_ACTIVE_HB_MS;
-        Board_LedRedOff();
-        Board_LedGreenToggle(); /* green heartbeat */
-      }
-    }
-    else /* MODE_IDLE */
-    {
-      if ((int32_t)(now - lastActivityMs) < (int32_t)CFG_IDLE_TIMEOUT_MS)
-      {
-        /* Woke on host activity: resume ToF ranging. */
-        mode = MODE_ACTIVE;
-        Sensors_Resume();
-        Board_LedRedOff();
-        nextTelemetryTick = now;
-        nextLedTick = now;
-      }
-      else if ((int32_t)(now - nextLedTick) >= 0)
-      {
-        nextLedTick = now + CFG_IDLE_LED_BLINK_MS;
-        Board_LedGreenOff();
-        Board_LedRedToggle(); /* red slow blink = low-power indicator */
-      }
-    }
-
-    /* Telemetry runs in both modes now, just at different cadences
-     * (CFG_ACTIVE_TELEMETRY_MS vs CFG_IDLE_TELEMETRY_MS). */
-    uint32_t telemetryPeriodMs =
-        (mode == MODE_ACTIVE) ? CFG_ACTIVE_TELEMETRY_MS : CFG_IDLE_TELEMETRY_MS;
-    if ((int32_t)(now - nextTelemetryTick) >= 0)
-    {
-      nextTelemetryTick = now + telemetryPeriodMs;
-      build_status(&st);
-      (void)Comm_SendTelemetry(&st);
-    }
+    AppState_Tick(&ctx, HAL_GetTick(), Comm_GetLinkStatus());
   }
 }
