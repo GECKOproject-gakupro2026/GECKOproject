@@ -38,6 +38,11 @@ void PumpRecTx();
  * 戻り値: 0=なし, 1=start, 2=stop。呼ぶと内部状態は0にクリアされる。 */
 uint8_t TakeRecCmd();
 
+/* 前回呼び出し以降にGATT write(fe41)を受信したか(=ホスト活動あり)を取り出す。
+ * PC側の1Hz keep-aliveでボードをACTIVEに保つための、有線UART/TCPの
+ * nsActivity相当。呼ぶと内部状態はfalseにクリアされる。 */
+bool TakeHostActivity();
+
 /* PumpRecTx()に「録音データの送信待ちがある」ことを伝える。
  * Service::poll()がrecorder::Stop()を呼んだ直後に呼ぶ。 */
 void StartRecTx();

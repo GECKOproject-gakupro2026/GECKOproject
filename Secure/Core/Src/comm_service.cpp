@@ -616,6 +616,16 @@ void Service::poll()
   }
   profLoops++;
 
+  /* BLE host activity: a GATT write on fe41 (e.g. the PC's 1 Hz keep-alive
+   * byte) counts as host traffic for the NS idle timer, mirroring how any
+   * inbound UART/TCP byte sets nsActivity in processRxByte(). Without this the
+   * board slid back to IDLE ~3 s after the last frame even while a BLE central
+   * was actively polling it. */
+  if (nsDriven && comm_ble::TakeHostActivity())
+  {
+    nsActivity = true;
+  }
+
   /* Recording control: BLE write (fe41) frames are parsed into bleRecCmd by
    * comm_ble.cpp's GATT write callback; this is the only place that consumes
    * it. Starting a recording forces audioStream_ off so the two don't fight

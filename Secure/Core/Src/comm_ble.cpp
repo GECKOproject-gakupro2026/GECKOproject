@@ -40,6 +40,10 @@ Frame_Decoder bleWriteDecoder;
 bool bleWriteDecoderInit = false;
 volatile uint8_t bleRecCmd = 0; /* 0=none, 1=start, 2=stop (set by the GATT
                                     write callback, consumed once) */
+volatile bool bleHostActivity = false; /* any GATT write (fe41) since the last
+                                    TakeHostActivity(): keeps the NS idle timer
+                                    awake over BLE, mirroring how any inbound
+                                    UART/TCP byte sets nsActivity */
 bool bleRecSendPending = false;
 uint32_t bleRecOff = 0;
 uint16_t bleRecChunkSeq = 0;
@@ -251,6 +255,13 @@ uint8_t TakeRecCmd()
   return cmd;
 }
 
+bool TakeHostActivity()
+{
+  bool active = bleHostActivity;
+  bleHostActivity = false;
+  return active;
+}
+
 void StartRecTx()
 {
   bleRecSendPending = true;
@@ -327,6 +338,13 @@ extern "C" uint8_t stm32wb_at_BLE_EVT_WRITE_cb(stm32wb_at_BLE_EVT_WRITE_t *param
   printf("[TLM] BLE write: svc=%u char=%u len=%u val0=0x%02X\r\n",
          param->svc_index, param->char_index, param->val_tab_len,
          param->val_tab_len > 0U ? param->val_tab[0] : 0U);
+
+  /* Any GATT write from the host is host activity - this is how the PC keeps
+   * the board ACTIVE over BLE (app.py sends a 1 Hz keep-alive byte on fe41),
+   * exactly like an inbound UART/TCP byte does over the wired links. Consumed
+   * in Service::poll() via comm_ble::TakeHostActivity(). */
+  comm_ble::bleHostActivity = true;
+
   if ((param->svc_index == 1U) && (param->val_tab_len > 0U))
   {
     if (param->val_tab[0] != 0U)
