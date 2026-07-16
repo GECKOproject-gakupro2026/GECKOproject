@@ -6,6 +6,20 @@
 > Phase A(UART高速化) → Phase B(ペーシング最適化) → Phase C(LC3調査) の順。
 > 1ステップ=1コミット、実機検証PASS前に次へ進まない。
 
+> **進捗(2026-07-16 更新)**
+> - **Phase A = 完了**。ただし実機検証の結論として制御UARTは **115200 で確定**
+>   (9600の12倍)。460800は初回ATがまれに化け、921600/1Mbpsはリンク不成立だった
+>   (詳細は自動メモリ [[ble-uart-max-baud]] / [[wb-build-tree-notify-fix]])。テレメトリは
+>   **10Hz** 化済み。`comm_ble::Init()` に AT bring-up リトライを実装。関連コミット:
+>   c6a89bf(115200)/ eb43a88(460800実験)/ 910747d(115200確定+リトライ)/ d59ce03(10Hz)/
+>   2544ed2(BLE keep-alive で ACTIVE 維持)。
+> - **Phase B = 一部未了**。B-1(`kChunksPerPump` 引き上げ)・B-2(チャンクロス対策)は未着手。
+>   なお PC→U585 の fe41 write 経路(録音の REC_START/STOP が通る道)は
+>   [[wb-build-tree-notify-fix]] の修正で疎通を回復済み。
+> - **Phase C(LC3調査)= 未着手**。
+> - 以降の作業は WiFi ホットスポットを立てられる環境で実機検証すること
+>   ([検証環境メモ_WiFiホットスポット未設定.md](検証環境メモ_WiFiホットスポット未設定.md))。
+
 ---
 
 ## Context(なぜこの変更をするか)
