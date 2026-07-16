@@ -34,6 +34,22 @@ constexpr size_t kRxBufSize = 1024; /* must fit an OTA frame (1024+8 max) with m
 uint8_t rxDmaBuf[kRxBufSize];
 size_t rxTail = 0; /* next byte index the app hasn't consumed yet */
 
+/* rxPending tracks bytes available to read as a running COUNT, not as an
+ * index comparison. The original code treated `head != rxTail` as the sole
+ * "is there data" test - but head and rxTail are both indices mod
+ * kRxBufSize, so if the circular DMA writes a full lap (or more) between two
+ * checks, head can land exactly back on rxTail and this reads as "empty"
+ * forever, even though 1024+ bytes of real data went by. This is a genuine,
+ * Wi-Fi-independent defect: once it happens, Console_GetChar()/ReadBlock()
+ * never return data again, the NS idle timer never sees another byte, IDLE
+ * becomes unrecoverable, and nothing that depends on inbound UART (audio
+ * start, BLE record commands relayed over the same activity path) can ever
+ * fire again. Tracking pending as an accumulated distance and comparing it
+ * against the buffer size turns that silent aliasing into a detectable,
+ * recoverable overrun instead. */
+size_t rxPending = 0;
+uint32_t rxOverrunCount = 0;
+
 DMA_HandleTypeDef hdmaUsart1Rx = {};
 DMA_QListTypeDef rxQueue = {};
 DMA_NodeTypeDef rxNode = {};
@@ -47,6 +63,26 @@ size_t dmaWriteIndex()
   DMA_Channel_TypeDef *ch = reinterpret_cast<DMA_Channel_TypeDef *>(hdmaUsart1Rx.Instance);
   uint32_t remaining = ch->CBR1 & 0xFFFFU;
   return (kRxBufSize - remaining) % kRxBufSize;
+}
+
+/* Re-samples the DMA write pointer and folds the newly-written distance into
+ * rxPending. If more than a full buffer's worth of bytes arrived since the
+ * last sample (the ring lapped rxTail), that window was overwritten before
+ * it could be read: count it as an overrun and resync rxTail to the current
+ * write position rather than keep replaying stale/torn bytes. */
+void refreshPending()
+{
+  static size_t lastHead = 0;
+  size_t head = dmaWriteIndex();
+  size_t advanced = (head - lastHead) % kRxBufSize;
+  lastHead = head;
+  rxPending += advanced;
+  if (rxPending > kRxBufSize)
+  {
+    rxOverrunCount++;
+    rxPending = 0;
+    rxTail = head; /* drop the torn window; resume from "now" */
+  }
 }
 
 bool startRxDma()
@@ -132,6 +168,7 @@ bool startRxDma()
   huart1.RxState = HAL_UART_STATE_BUSY_RX;
 
   rxTail = 0;
+  rxPending = 0;
   return true;
 }
 } // namespace
@@ -158,31 +195,74 @@ extern "C" int _write(int file, char *ptr, int len)
   return len;
 }
 
+namespace
+{
+bool ensureDmaStarted()
+{
+  if (dmaStarted)
+  {
+    return true;
+  }
+  dmaStarted = startRxDma();
+  printf("[CONSOLE] RX DMA start: %s, CBR1=0x%08lX CCR=0x%08lX\r\n",
+         dmaStarted ? "OK" : "FAILED",
+         reinterpret_cast<DMA_Channel_TypeDef *>(hdmaUsart1Rx.Instance)->CBR1,
+         reinterpret_cast<DMA_Channel_TypeDef *>(hdmaUsart1Rx.Instance)->CCR);
+  return dmaStarted;
+}
+} // namespace
+
 extern "C" int Console_GetChar(uint32_t timeout_ms)
 {
-  if (!dmaStarted)
+  if (!ensureDmaStarted())
   {
-    dmaStarted = startRxDma();
-    printf("[CONSOLE] RX DMA start: %s, CBR1=0x%08lX CCR=0x%08lX\r\n",
-           dmaStarted ? "OK" : "FAILED",
-           reinterpret_cast<DMA_Channel_TypeDef *>(hdmaUsart1Rx.Instance)->CBR1,
-           reinterpret_cast<DMA_Channel_TypeDef *>(hdmaUsart1Rx.Instance)->CCR);
-    if (!dmaStarted)
-    {
-      return -1;
-    }
+    return -1;
   }
 
   uint32_t t0 = HAL_GetTick();
   do
   {
-    size_t head = dmaWriteIndex();
-    if (head != rxTail)
+    refreshPending();
+    if (rxPending > 0U)
     {
       uint8_t ch = rxDmaBuf[rxTail];
       rxTail = (rxTail + 1U) % kRxBufSize;
+      rxPending--;
       return ch;
     }
   } while (timeout_ms != 0U && (HAL_GetTick() - t0) < timeout_ms);
   return -1;
+}
+
+extern "C" size_t Console_ReadBlock(uint8_t *dst, size_t maxLen)
+{
+  if (!ensureDmaStarted())
+  {
+    return 0;
+  }
+
+  refreshPending();
+  size_t n = (rxPending < maxLen) ? rxPending : maxLen;
+  for (size_t i = 0; i < n; i++)
+  {
+    dst[i] = rxDmaBuf[rxTail];
+    rxTail = (rxTail + 1U) % kRxBufSize;
+  }
+  rxPending -= n;
+  return n;
+}
+
+extern "C" size_t Console_RxPending(void)
+{
+  if (!dmaStarted)
+  {
+    return 0;
+  }
+  refreshPending();
+  return rxPending;
+}
+
+extern "C" uint32_t Console_GetRxOverrunCount(void)
+{
+  return rxOverrunCount;
 }

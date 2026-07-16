@@ -611,11 +611,25 @@ void Service::poll()
     /* In NonSecure-driven mode nobody else pumps the console RX path
      * (App_Main()'s loop, which used to do this, doesn't run) - poll() is
      * the only place left, since Comm_Poll() is the NS app's single pump
-     * point for the whole comm service. */
-    int key = Console_GetChar(0);
-    if (key >= 0)
+     * point for the whole comm service.
+     *
+     * Drain the WHOLE RX ring here, not just one byte: Console_GetChar(0)
+     * used to be called once per poll() and returned at most one byte per
+     * call, capping inbound UART throughput at one byte per superloop
+     * iteration. Combined with the RX DMA ring's lack of overrun detection
+     * (fixed in console.cpp - a lapped ring used to silently alias to
+     * "empty" forever), any stretch where poll() ran slower than the host
+     * was sending could starve RX permanently. A bounded block read drains
+     * everything currently pending in one shot, so a slow loop iteration
+     * costs latency, never permanent RX loss. */
+    uint8_t rxBlock[256];
+    size_t n = Console_ReadBlock(rxBlock, sizeof(rxBlock));
+    if (n > 0U)
     {
-      (void)processRxByte(static_cast<uint8_t>(key), false);
+      for (size_t i = 0; i < n; i++)
+      {
+        (void)processRxByte(rxBlock[i], false);
+      }
       if (uartLink_.state != LinkState::Active)
       {
         state_log::Push(state_log::Event::UartActive, 0U);
@@ -790,8 +804,10 @@ void Service::poll()
   else if (now - profStart >= 2000U && profPrints < 3U)
   {
     profPrints++;
-    printf("[PROF] per2s: collect=%lums uart=%lums ble=%lums tcp=%lums frames=%lu loops=%lu\r\n",
-           profCollect, profUart, profBle, profTcp, profFrames, profLoops);
+    printf("[PROF] per2s: collect=%lums uart=%lums ble=%lums tcp=%lums frames=%lu loops=%lu "
+           "rx_overrun=%lu\r\n",
+           profCollect, profUart, profBle, profTcp, profFrames, profLoops,
+           (unsigned long)Console_GetRxOverrunCount());
     profCollect = profUart = profBle = profTcp = 0;
     profFrames = profLoops = 0;
     profStart = now;
