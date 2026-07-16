@@ -79,6 +79,18 @@ struct __attribute__((packed)) MiniStatus
 };
 static_assert(sizeof(MiniStatus) == 39, "MiniStatus layout must match PC parser");
 
+/* Per-link connection state. Each comm link (BLE / TCP / UART) is modelled as
+ * a tiny two-state machine so poll() can reason about "which link is active"
+ * explicitly instead of scattering IsConnected()/HasClient() checks. Active =
+ * a peer is present and traffic is flowing; Idle = standby. `lastActivityMs`
+ * is the tick of the most recent traffic, used to age a link back to Idle. */
+enum class LinkState : uint8_t { Idle, Active };
+struct LinkFsm
+{
+  LinkState state = LinkState::Idle;
+  uint32_t lastActivityMs = 0;
+};
+
 class Service
 {
 public:
@@ -153,6 +165,12 @@ private:
   bool audioOk_ = false;
   bool tofOk_ = false;
   bool audioStream_ = false;
+
+  /* Per-link state machines (updated each poll() from IsConnected()/HasClient()/
+   * inbound UART bytes). Drive link exclusivity + the TCP-accept throttle. */
+  LinkFsm bleLink_;
+  LinkFsm tcpLink_;
+  LinkFsm uartLink_;
 };
 
 /* Brings up the comm service (and, until the Phase C/D moves land, the

@@ -565,11 +565,35 @@ void Service::poll()
     if (key >= 0)
     {
       (void)processRxByte(static_cast<uint8_t>(key), false);
+      uartLink_.state = LinkState::Active;
+      uartLink_.lastActivityMs = HAL_GetTick();
     }
   }
 
   loopCount_++;
   uint32_t now = HAL_GetTick();
+
+  /* Per-link state update. Each link is Active while a peer is present and
+   * traffic is recent; it ages back to Idle after kLinkIdleMs of silence.
+   * These drive the TCP-accept throttle below (and, in a later step, link
+   * exclusivity). UART is DMA-driven and always allowed to interrupt, so it
+   * is never gated on the other links - it only reports its own state. */
+  constexpr uint32_t kLinkIdleMs = 3000U;
+  bleLink_.state = comm_ble::IsConnected() ? LinkState::Active : LinkState::Idle;
+  if (bleLink_.state == LinkState::Active)
+  {
+    bleLink_.lastActivityMs = now;
+  }
+  tcpLink_.state = comm_wifi::HasClient() ? LinkState::Active : LinkState::Idle;
+  if (tcpLink_.state == LinkState::Active)
+  {
+    tcpLink_.lastActivityMs = now;
+  }
+  if (uartLink_.state == LinkState::Active &&
+      static_cast<int32_t>(now - uartLink_.lastActivityMs) >= (int32_t)kLinkIdleMs)
+  {
+    uartLink_.state = LinkState::Idle;
+  }
   /* Once the NonSecure app has submitted at least one status via
    * Comm_SendTelemetry(), Secure stops producing/pushing its own status on
    * the periodic tick - submitExternalStatus() already sent it. Sensor
@@ -662,12 +686,14 @@ void Service::poll()
      * IDLE but never leave it. Idle means nothing to serve over TCP anyway;
      * the console/BLE wake paths stay live. */
 
-    /* While a BLE central is the active link, stretch the no-client TCP
-     * accept poll: its ~300 ms module-side block otherwise stalls the 10 Hz
-     * BLE notify every ~5 s (the "momentary freeze"). A connected TCP client
-     * is unaffected (recv path, not accept). When no BLE central is present,
-     * keep the normal 5 s cadence so a fresh TCP client still connects promptly. */
-    comm_wifi::SetAcceptInterval(comm_ble::IsConnected() ? 60000U : 5000U);
+    /* While another link is the active one (here: a BLE central), stretch the
+     * no-client TCP accept poll: its ~300 ms module-side block otherwise stalls
+     * the 10 Hz BLE notify every ~5 s (the "momentary freeze"). A connected TCP
+     * client is unaffected (recv path, not accept). When no other link is
+     * active, keep the normal 5 s cadence so a fresh TCP client still connects
+     * promptly. Driven by the per-link state machine, not a bare IsConnected(). */
+    const bool otherLinkActive = (bleLink_.state == LinkState::Active);
+    comm_wifi::SetAcceptInterval(otherLinkActive ? 60000U : 5000U);
     uint32_t t0 = HAL_GetTick();
     pollTcp();
     profTcp += HAL_GetTick() - t0;
