@@ -644,10 +644,19 @@ void Service::poll()
 
   /* Per-link state update. Each link is Active while a peer is present and
    * traffic is recent; it ages back to Idle after kLinkIdleMs of silence.
-   * These drive the TCP-accept throttle below (and, in a later step, link
-   * exclusivity). UART is DMA-driven and always allowed to interrupt, so it
-   * is never gated on the other links - it only reports its own state. */
-  constexpr uint32_t kLinkIdleMs = 3000U;
+   * These drive the TCP-accept throttle below (and link exclusivity). UART is
+   * DMA-driven and always allowed to interrupt, so it is never gated on the
+   * other links - it only reports its own state.
+   *
+   * kLinkIdleMs was originally 3000 - identical to the NonSecure device
+   * machine's CFG_IDLE_TIMEOUT_MS. That resonance was a real bug: the instant
+   * the NS device entered IDLE, uartLink_ aged out in the same tick, dropping
+   * otherLinkActive below and springing the TCP accept interval back from
+   * 60 s to the brisk 5 s cadence - at exactly the moment the shared poll()
+   * loop could least afford a ~300 ms accept stall. Set well above the device
+   * idle timeout so the link-level bookkeeping never flips in lockstep with
+   * the device-level one. */
+  constexpr uint32_t kLinkIdleMs = 10000U;
   LinkState blePrev = bleLink_.state;
   bleLink_.state = comm_ble::IsConnected() ? LinkState::Active : LinkState::Idle;
   if (bleLink_.state == LinkState::Active)
@@ -777,20 +786,25 @@ void Service::poll()
      * IDLE but never leave it. Idle means nothing to serve over TCP anyway;
      * the console/BLE wake paths stay live. */
 
-    /* Link exclusivity: while another WiFi/BLE link is the active one, stretch
-     * the no-client TCP accept poll so its ~300 ms module-side block cannot
-     * stall the active link (this is what removed the 10 Hz BLE "freeze").
-     * BLE Active is the case that matters here; a TCP client already connected
-     * takes the recv path (accept isn't run), so including tcpLink_ is just for
-     * symmetry/readability. When no other link is active, keep the normal 5 s
-     * cadence so a fresh TCP client still connects promptly.
-     *
-     * UART is deliberately NOT part of this exclusivity: it is DMA-driven and
-     * always allowed to interrupt (its bytes are drained unconditionally at the
-     * top of poll() and mark uartLink_ Active), so UART commands take effect
-     * immediately regardless of which link is otherwise active. */
+    /* Stretch the no-client TCP accept poll so its ~300 ms module-side block
+     * cannot stall whichever link is actually carrying data. Originally this
+     * only fired for an Active BLE/TCP link, which left a UART/VCP-only session
+     * exposed: with no BLE central and no TCP client, the accept ran every 5 s
+     * and its ~300 ms stall dropped the UART telemetry from 50 Hz toward
+     * ~10 Hz. Now the accept is stretched to 60 s whenever *any* of these hold:
+     *   - a BLE central or TCP client link is Active (original case), OR
+     *   - a UART/console session is Active (the 50 Hz telemetry case), OR
+     *   - Wi-Fi is not up (no IP): there is no point polling accept with no
+     *     network, and PollRecv already early-returns when the listen socket
+     *     is absent - this just avoids the interval bookkeeping.
+     * Only when Wi-Fi is up AND no link is active do we keep the brisk 5 s
+     * cadence, so a fresh TCP client still connects promptly. UART itself is
+     * never gated by this - it is DMA-driven and always drained at the top of
+     * poll(); this only decides how often the blocking accept is attempted. */
     const bool otherLinkActive = (bleLink_.state == LinkState::Active) ||
-                                 (tcpLink_.state == LinkState::Active);
+                                 (tcpLink_.state == LinkState::Active) ||
+                                 (uartLink_.state == LinkState::Active) ||
+                                 !comm_wifi::NetUp();
     comm_wifi::SetAcceptInterval(otherLinkActive ? 60000U : 5000U);
     uint32_t t0 = HAL_GetTick();
     pollTcp();

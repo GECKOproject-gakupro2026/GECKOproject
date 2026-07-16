@@ -7,6 +7,7 @@
 #include "comm_wifi.hpp"
 
 #include "app_config.h"
+#include "console.h"
 #include "main.h"
 
 #include "mx_wifi.h"
@@ -16,7 +17,6 @@
 #include <cstring>
 
 extern "C" SPI_HandleTypeDef hspi2; /* EMW3080 Wi-Fi module */
-extern UART_HandleTypeDef huart1;   /* used only for the accept-guard RXNE check */
 
 namespace comm_wifi
 {
@@ -224,8 +224,13 @@ void tcpServerInit()
     return;
   }
   /* lwip semantics: accept() honours SO_RCVTIMEO of the listening socket,
-   * turning the module's ~10 s blocking accept into a cheap 100 ms poll */
-  int32_t acceptTmo = 100;
+   * turning the module's ~10 s blocking accept into a short poll. Kept low
+   * (20 ms) so that, even when the accept interval is brisk (Wi-Fi up, no
+   * link active), a single accept attempt can't stall the shared poll() loop
+   * long enough to disturb 50 Hz UART telemetry. The module doesn't honour
+   * this perfectly (a bare accept has been seen to block longer), so the
+   * accept-interval stretch in Service::poll() is the primary guard. */
+  int32_t acceptTmo = 20;
   (void)MX_WIFI_Socket_setsockopt(obj, tcpListenFd, MX_SOL_SOCKET,
                                   MX_SO_RCVTIMEO, &acceptTmo, sizeof(acceptTmo));
   printf("[TLM] TCP server listening on port %u\r\n", CFG_WIFI_TCP_PORT);
@@ -319,9 +324,13 @@ int32_t PollRecv(uint8_t *buf, size_t maxLen)
                                                 interval is stretched while another
                                                 link is active (SetAcceptInterval) */
 
-    /* A pending console key must win over the ~10 s blocking accept,
-     * otherwise the interactive commands become unusable */
-    if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_RXNE))
+    /* A pending console byte must win over the ~10 s blocking accept,
+     * otherwise interactive commands become unusable. This used to check
+     * UART_FLAG_RXNE, which never sets - console RX is DMA-driven, so the
+     * DMA (not the UART peripheral's own shift register) claims each byte
+     * and RXNE is perpetually clear. Console_RxPending() reports the real
+     * backlog sitting in the RX ring instead. */
+    if (Console_RxPending() > 0U)
     {
       return 0;
     }
