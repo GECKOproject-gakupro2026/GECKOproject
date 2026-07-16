@@ -82,6 +82,11 @@ bool nsDriven = false;          /* NS app pumps the loop                    */
 bool nsTelemetryActive = false; /* NS has taken over status production      */
 bool telemetryEnabled = true;   /* Comm_SetTelemetryEnabled (low-power)     */
 volatile bool nsActivity = false; /* any inbound host traffic since poll    */
+/* NonSecure device state machine's current state (AppState_t: 0=IDLE,
+ * 1=ACTIVE_ACQUIRE, 2=ACTIVE_COMM), forwarded via Comm_SetDeviceState(). Only
+ * meaningful once NS has called it at least once; defaults to "ACTIVE" (2) so
+ * MiniStatus.flags reads something sane before the first update. */
+uint32_t deviceState = 2U;
 uint8_t nsCmdRing[16];
 uint8_t nsCmdHead = 0;
 uint8_t nsCmdTail = 0;
@@ -962,6 +967,29 @@ extern "C" int CommBridge_PollHostCommand(uint8_t *out)
 extern "C" void CommBridge_SetTelemetryEnabled(uint32_t on)
 {
   telemetry::telemetryEnabled = (on != 0U);
+}
+
+namespace telemetry
+{
+uint32_t GetDeviceState() { return deviceState; }
+} // namespace telemetry
+
+extern "C" void CommBridge_SetDeviceState(uint32_t state)
+{
+  using namespace telemetry;
+  /* AppState_t: 0=STATE_IDLE, 1=STATE_ACTIVE_ACQUIRE, 2=STATE_ACTIVE_COMM
+   * (NonSecure/Core/Inc/app_state.h - duplicated here as plain values since
+   * this boundary only ever carries a uint32_t, not the enum type). Log only
+   * the IDLE<->ACTIVE edge, not every ACQUIRE<->COMM sub-state flip within
+   * ACTIVE (that would flood the 64-entry SRAM ring for no diagnostic gain). */
+  bool wasIdle = (deviceState == 0U);
+  bool isIdle = (state == 0U);
+  if (wasIdle != isIdle)
+  {
+    state_log::Push(isIdle ? state_log::Event::DeviceIdle : state_log::Event::DeviceActive,
+                    state);
+  }
+  deviceState = state;
 }
 
 extern "C" uint32_t CommBridge_GetLinkStatus(void)

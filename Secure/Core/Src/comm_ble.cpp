@@ -165,9 +165,16 @@ void SendStatus(const telemetry::FullStatus &st)
   mini.audio_peak = st.audio_peak;
   mini.uptime_s = static_cast<uint16_t>(st.uptime_ms / 1000U);
   mini.die_temp_x100 = st.die_temp_x100;
+  /* bits 0-2: existing link/sensor flags. bits 3-4: NonSecure device state
+   * (telemetry::GetDeviceState(), forwarded from AppState_t via
+   * Comm_SetDeviceState() - 0=IDLE, 1=ACTIVE_ACQUIRE, 2=ACTIVE_COMM). Fits in
+   * 2 bits (max value 3) with no MiniStatus size change; bits 5-7 stay free
+   * for later use. */
+  uint32_t devState = telemetry::GetDeviceState() & 0x3U;
   mini.flags = static_cast<uint8_t>((st.ble_alive != 0U ? 1U : 0U) |
                                     (st.wifi_alive != 0U ? 2U : 0U) |
-                                    (st.tof_ok != 0U ? 4U : 0U));
+                                    (st.tof_ok != 0U ? 4U : 0U) |
+                                    (devState << 3));
   mini.cpu_load_pct = st.cpu_load_pct;
 
   stm32wb_at_BLE_NOTIF_VAL_t notif = {};

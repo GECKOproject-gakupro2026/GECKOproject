@@ -79,6 +79,13 @@ struct __attribute__((packed)) MiniStatus
 };
 static_assert(sizeof(MiniStatus) == 39, "MiniStatus layout must match PC parser");
 
+/* NonSecure device state machine's last-reported state (AppState_t: 0=IDLE,
+ * 1=ACTIVE_ACQUIRE, 2=ACTIVE_COMM), forwarded via Comm_SetDeviceState() /
+ * CommBridge_SetDeviceState(). comm_ble.cpp reads this to fill MiniStatus's
+ * spare flag bits without reaching into comm_service.cpp's anonymous
+ * namespace directly. */
+uint32_t GetDeviceState();
+
 /* Per-link connection state. Each comm link (BLE / TCP / UART) is modelled as
  * a tiny two-state machine so poll() can reason about "which link is active"
  * explicitly instead of scattering IsConnected()/HasClient() checks. Active =

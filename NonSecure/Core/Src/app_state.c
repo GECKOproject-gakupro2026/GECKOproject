@@ -44,6 +44,11 @@ void AppState_Init(AppStateCtx_t *ctx, uint32_t now_ms)
   ctx->commReturnMs = now_ms;
   ctx->nextCommMs = now_ms;
   ctx->haveAcquired = 0U;
+  /* 起点をACTIVE以外の値にしておき、初回のAppState_Tick()で必ず一度
+   * Comm_SetDeviceState(STATE_ACTIVE_COMM) が呼ばれるようにする。 */
+  ctx->lastReportedState = STATE_IDLE;
+  Comm_SetDeviceState((uint32_t)ctx->state);
+  ctx->lastReportedState = ctx->state;
 }
 
 /* IDLEに入ってよいか(=ACTIVEからIDLEへの遷移条件): 無通信タイムアウト経過
@@ -127,6 +132,15 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
       ctx->nextLedMs = now_ms;
       ctx->nextTelemetryMs = now_ms;
       break;
+  }
+
+  if (ctx->state != ctx->lastReportedState)
+  {
+    /* Secure側へ状態変化を伝える(MiniStatus.flagsとstate_logに反映される)。
+     * ACQUIRE<->COMMのサブ状態切り替えも含め、遷移のたびに呼ぶ(comm_service.cpp
+     * 側でIDLE<->ACTIVEの跨ぎだけをログに記録するので、ここでは間引かない)。 */
+    Comm_SetDeviceState((uint32_t)ctx->state);
+    ctx->lastReportedState = ctx->state;
   }
 
   if (ctx->state == STATE_IDLE)

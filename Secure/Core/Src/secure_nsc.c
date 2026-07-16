@@ -144,6 +144,17 @@ CMSE_NS_ENTRY void Comm_SetTelemetryEnabled(uint32_t on)
 }
 
 /**
+  * @brief  Additive gateway (not part of the frozen 7): forwards the
+  *         NonSecure device state machine's current state so Secure can
+  *         surface it over BLE (MiniStatus.flags) and the state-transition
+  *         log. A plain uint32_t needs no pointer validation.
+  */
+CMSE_NS_ENTRY void Comm_SetDeviceState(uint32_t state)
+{
+  CommBridge_SetDeviceState(state);
+}
+
+/**
   * @brief  Link status bits: 0=BLE alive, 1=WiFi up, 2=BLE conn, 3=TCP client.
   */
 CMSE_NS_ENTRY uint32_t Comm_GetLinkStatus(void)

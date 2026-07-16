@@ -152,6 +152,11 @@ class StatusMonitorApp:
         self.power_var = tk.StringVar(value="電源: ?")
         ttk.Label(top, textvariable=self.power_var).pack(side="left", padx=4)
 
+        # デバイス状態機械の表示(BLE経由のMiniStatus.flags bit3-4のみに載る。
+        # UART/TCP接続時は情報源が無いため "-" のまま)。
+        self.dev_state_var = tk.StringVar(value="状態: -")
+        ttk.Label(top, textvariable=self.dev_state_var).pack(side="left", padx=4)
+
         # 時刻同期: PCのUnix時刻をボードへ送る(epochオフセット方式)。
         ttk.Button(top, text="時刻同期", command=self._sync_time).pack(side="left", padx=4)
         # 待機: アクティブなリンクをIDLEへ落とす(LINK_STANDBY)。
@@ -656,9 +661,15 @@ class StatusMonitorApp:
         if self.tree.exists(key):
             self.tree.set(key, "value", value)
 
+    DEVICE_STATE_LABELS = {0: "IDLE", 1: "ACTIVE(取得)", 2: "ACTIVE(通信)"}
+
     def _apply(self, st: protocol.Status) -> None:
         self.button_canvas.itemconfigure(
             self.button_led, fill="lime green" if st.button else "gray70")
+
+        if st.device_state is not None:
+            label = self.DEVICE_STATE_LABELS.get(st.device_state, f"?({st.device_state})")
+            self.dev_state_var.set(f"状態: {label}")
         if not st.compact:
             secs = st.uptime_ms // 1000
             self.uptime_var.set(f"{secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}")

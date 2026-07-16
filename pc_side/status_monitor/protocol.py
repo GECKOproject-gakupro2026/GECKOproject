@@ -106,6 +106,10 @@ class Status:
     uid: str = ""
     idcode: int = 0
     compact: bool = False
+    # device_state: NonSecure app_state.h の AppState_t 値(0=IDLE,
+    # 1=ACTIVE_ACQUIRE, 2=ACTIVE_COMM)。MiniStatus.flags のbit3-4のみに載る
+    # (CMD_STATUS/FullStatus経由では常に None のまま = UART/TCPからは見えない)。
+    device_state: Optional[int] = None
 
 
 def decode_status(cmd: int, payload: bytes) -> Optional[Status]:
@@ -143,6 +147,7 @@ def decode_status(cmd: int, payload: bytes) -> Optional[Status]:
             ble_alive=bool(v[19] & 1),
             wifi_alive=bool(v[19] & 2),
             tof_ok=bool(v[19] & 4),
+            device_state=(v[19] >> 3) & 0x3,
             cpu_load_pct=v[20],
             compact=True,
         )

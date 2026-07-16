@@ -44,6 +44,8 @@ typedef struct
   uint32_t   commReturnMs;     /* 直近のCOMM(送信)が戻った時刻 */
   uint32_t   nextCommMs;       /* 次にCOMM(送信)する時刻(前回戻り+周期で算出) */
   uint8_t    haveAcquired;     /* ACQUIRE済み(次回送信用スナップショットが新鮮) */
+  AppState_t lastReportedState; /* 前回 Comm_SetDeviceState() に渡した値
+                                    (変化した時だけ呼ぶための比較用) */
   FullStatus_t st;             /* 最新スナップショット(Trigger_Poll にも渡す) */
 } AppStateCtx_t;
 

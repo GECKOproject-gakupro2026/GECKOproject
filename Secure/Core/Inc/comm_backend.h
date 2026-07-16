@@ -69,6 +69,11 @@ void CommBridge_GetMcuInfo(FullStatus_t *dst);
 /* 起動成功を起動監視(BootGuard)に伝える。実装は boot_guard.cpp */
 void BootGuard_ConfirmBoot(void);
 
+/* 【追加・上記7個の凍結対象には含まれない】
+ * NonSecureのデバイス状態機械の現在値を受け取る。comm_service.cpp が
+ * MiniStatus.flags のbit3-4と状態遷移ログに反映する。 */
+void CommBridge_SetDeviceState(uint32_t state);
+
 #ifdef __cplusplus
 }
 #endif

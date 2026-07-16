@@ -61,6 +61,14 @@ void Comm_GetMcuInfo(FullStatus_t *dst);
  * これを呼ばないまま数回リセットが続くと、前のファームへ自動ロールバックされる。 */
 void Secure_ConfirmBoot(void);
 
+/* 【追加ゲートウェイ・上記7個の凍結対象には含まれない】
+ * NonSecureのデバイス状態機械(app_state.h の AppState_t)の現在値をSecure側へ
+ * 伝える。Secure側はこれを MiniStatus.flags の bit3-4 に載せて BLE 経由でPCへ
+ * 見せる(comm_ble.cpp の SendStatus() 参照)ほか、状態遷移ログにも記録する。
+ * state は AppState_t の値をそのまま渡す(0=IDLE, 1=ACTIVE_ACQUIRE,
+ * 2=ACTIVE_COMM)。状態が変化した時にだけ呼べば十分。 */
+void Comm_SetDeviceState(uint32_t state);
+
 #ifdef __cplusplus
 }
 #endif
