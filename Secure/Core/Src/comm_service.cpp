@@ -661,6 +661,13 @@ void Service::poll()
      * supposed to wake the board never gets drained: the board could enter
      * IDLE but never leave it. Idle means nothing to serve over TCP anyway;
      * the console/BLE wake paths stay live. */
+
+    /* While a BLE central is the active link, stretch the no-client TCP
+     * accept poll: its ~300 ms module-side block otherwise stalls the 10 Hz
+     * BLE notify every ~5 s (the "momentary freeze"). A connected TCP client
+     * is unaffected (recv path, not accept). When no BLE central is present,
+     * keep the normal 5 s cadence so a fresh TCP client still connects promptly. */
+    comm_wifi::SetAcceptInterval(comm_ble::IsConnected() ? 60000U : 5000U);
     uint32_t t0 = HAL_GetTick();
     pollTcp();
     profTcp += HAL_GetTick() - t0;

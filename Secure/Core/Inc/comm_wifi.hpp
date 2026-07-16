@@ -30,6 +30,12 @@ bool NetUp();
 /* TCPクライアントが接続中か */
 bool HasClient();
 
+/* クライアント未接続時の accept() ポーリング間隔[ms]を設定する。
+ * accept() はモジュール側で約300msブロックするため、他のリンク(例: BLE
+ * セントラル接続中)がアクティブな間はこれを大きくして、そのリンクの送信が
+ * accept で止まらないようにする。既定5000ms、下限100ms。 */
+void SetAcceptInterval(uint32_t ms);
+
 /* 組み立て済みのフレームをTCPクライアントへ送る。
  * 送信失敗が2回続いたらクライアントを切断する（切断検知はこの送信経路が権威）。 */
 void SendFrame(const uint8_t *frame, size_t len);

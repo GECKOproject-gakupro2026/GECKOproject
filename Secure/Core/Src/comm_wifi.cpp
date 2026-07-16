@@ -27,6 +27,11 @@ bool wifiNetUp = false;      /* joined the AP, has an IP */
 int32_t tcpListenFd = -1;
 int32_t tcpClientFd = -1;
 uint32_t nextAcceptTick = 0;
+uint32_t acceptIntervalMs = 5000U; /* how often to poll accept() with no client;
+                                      raised by SetAcceptInterval() while another
+                                      link (e.g. a BLE central) is the active one,
+                                      so the ~300 ms blocking accept stops stalling
+                                      that link (see PollRecv / Service::poll) */
 uint32_t tcpSendFails = 0;
 
 volatile uint8_t wifiLastEvent = 0; /* MWIFI_EVENT_... */
@@ -249,6 +254,15 @@ bool NetUp() { return wifiNetUp; }
 
 bool HasClient() { return tcpClientFd >= 0; }
 
+void SetAcceptInterval(uint32_t ms)
+{
+  if (ms < 100U)
+  {
+    ms = 100U; /* never spin the blocking accept faster than 10 Hz */
+  }
+  acceptIntervalMs = ms;
+}
+
 void SendFrame(const uint8_t *frame, size_t len)
 {
   if (tcpClientFd < 0)
@@ -301,7 +315,9 @@ int32_t PollRecv(uint8_t *buf, size_t maxLen)
     {
       return 0;
     }
-    nextAcceptTick = now + 5000U; /* module-side accept blocks ~300 ms */
+    nextAcceptTick = now + acceptIntervalMs; /* module-side accept blocks ~300 ms;
+                                                interval is stretched while another
+                                                link is active (SetAcceptInterval) */
 
     /* A pending console key must win over the ~10 s blocking accept,
      * otherwise the interactive commands become unusable */
