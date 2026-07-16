@@ -425,6 +425,26 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
       NVIC_SystemReset(); /* does not return */
       break;
     }
+    case FRAME_CMD_LINK_STANDBY:
+    {
+      /* Host explicitly ends/idles the link it sent this on. Put that link's
+       * FSM into Idle now; it re-activates on the next inbound traffic (the
+       * per-link update at the top of poll()). BLE writes don't reach here
+       * (they take comm_ble's own decoder path), so the origins that matter
+       * are TCP (fromTcp) and UART. */
+      if (fromTcp)
+      {
+        tcpLink_.state = LinkState::Idle;
+      }
+      else
+      {
+        uartLink_.state = LinkState::Idle;
+      }
+      AckPayload ack = {cmd, seq, 0U};
+      sendResponse(fromTcp, FRAME_CMD_ACK,
+                   reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
+      break;
+    }
     default:
       break; /* unknown inbound command: ignore */
   }

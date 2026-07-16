@@ -39,6 +39,7 @@ extern "C" {
 #define FRAME_CMD_REC_STOP     0x0AU   /* PC->board: stop SRAM recording     */
 #define FRAME_CMD_REC_CHUNK    0x0BU   /* board->PC: raw TLV, not this codec */
 #define FRAME_CMD_REC_END      0x0CU   /* board->PC: raw TLV, not this codec */
+#define FRAME_CMD_LINK_STANDBY 0x0DU   /* PC->board: end/idle the sending link */
 #define FRAME_CMD_ACK          0x7EU   /* {orig_cmd, orig_seq, u32 arg}      */
 #define FRAME_CMD_NACK         0x7FU   /* {orig_cmd, orig_seq, u8 error}     */
 
