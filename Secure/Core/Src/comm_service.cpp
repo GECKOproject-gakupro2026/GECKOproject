@@ -87,6 +87,16 @@ volatile bool nsActivity = false; /* any inbound host traffic since poll    */
  * meaningful once NS has called it at least once; defaults to "ACTIVE" (2) so
  * MiniStatus.flags reads something sane before the first update. */
 uint32_t deviceState = 2U;
+
+/* Explicit wake/sleep requests for the strict flag-driven state machine
+ * (Step C2): unlike nsActivity (set on ANY inbound byte, used to EXTEND
+ * ACTIVE / detect general traffic), these are set ONLY by the dedicated
+ * FRAME_CMD_ENTER_COMM / FRAME_CMD_STOP_COMM commands in handleFrame(), and
+ * are the ONLY thing that may bring the device machine out of IDLE (see
+ * app_state.c's wake_requested()). Consumed (cleared) by
+ * Comm_TakeExplicitWake()/Comm_TakeStopRequested(). */
+volatile bool explicitWakeRequested = false;
+volatile bool stopCommRequested = false;
 uint8_t nsCmdRing[16];
 uint8_t nsCmdHead = 0;
 uint8_t nsCmdTail = 0;
@@ -447,6 +457,30 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
         uartLink_.state = LinkState::Idle;
       }
       state_log::Push(state_log::Event::LinkStandby, fromTcp ? 1U : 0U);
+      AckPayload ack = {cmd, seq, 0U};
+      sendResponse(fromTcp, FRAME_CMD_ACK,
+                   reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
+      break;
+    }
+    case FRAME_CMD_ENTER_COMM:
+    {
+      /* Strict flag-driven FSM (Step C2): this is the ONLY way the device
+       * machine leaves IDLE (see app_state.c's wake_requested(), which reads
+       * this through Comm_TakeExplicitWake() instead of negating the idle
+       * timeout). Ordinary traffic still extends nsActivity/ACTIVE once
+       * awake, but cannot itself cause the IDLE->ACTIVE transition. */
+      explicitWakeRequested = true;
+      state_log::Push(state_log::Event::EnterComm, fromTcp ? 1U : 0U);
+      AckPayload ack = {cmd, seq, 0U};
+      sendResponse(fromTcp, FRAME_CMD_ACK,
+                   reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
+      break;
+    }
+    case FRAME_CMD_STOP_COMM:
+    {
+      /* Explicit ACTIVE->IDLE hint, consumed by app_state.c the same way. */
+      stopCommRequested = true;
+      state_log::Push(state_log::Event::StopComm, fromTcp ? 1U : 0U);
       AckPayload ack = {cmd, seq, 0U};
       sendResponse(fromTcp, FRAME_CMD_ACK,
                    reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
@@ -990,6 +1024,22 @@ extern "C" void CommBridge_SetDeviceState(uint32_t state)
                     state);
   }
   deviceState = state;
+}
+
+extern "C" uint32_t CommBridge_TakeExplicitWake(void)
+{
+  using namespace telemetry;
+  bool req = explicitWakeRequested;
+  explicitWakeRequested = false;
+  return req ? 1U : 0U;
+}
+
+extern "C" uint32_t CommBridge_TakeStopRequested(void)
+{
+  using namespace telemetry;
+  bool req = stopCommRequested;
+  stopCommRequested = false;
+  return req ? 1U : 0U;
 }
 
 extern "C" uint32_t CommBridge_GetLinkStatus(void)

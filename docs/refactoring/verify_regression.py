@@ -18,6 +18,11 @@ IDLE判定について(P1でIDLE再定義に合わせて改訂):
     そのためIDLE遷移の判定は「フレームが止まる」ではなく「通信は継続し
     つつToFがSLEEPしている(tof_ok=0)」、IDLE復帰の判定は「フレーム再開」
     に加えて「ToFが再びranging中(tof_ok=1)」を見る。
+
+厳密FSM(Step C2)について:
+    IDLE->ACTIVEの復帰根拠は明示コマンド(FRAME_CMD_ENTER_COMM)のみに厳密化
+    された。無害な\\x00バイト等の一般的な通信では復帰しない。このスクリプトの
+    keep-alive送信は ENTER_COMM フレームを送る(app.pyの1Hzループと同じ経路)。
 """
 from __future__ import annotations
 
@@ -42,7 +47,9 @@ def check(name: str, ok: bool, detail: str) -> None:
 
 
 def collect(ser, parser, secs: float, keepalive: bool):
-    """secs秒間受信する。keepaliveがTrueなら1秒ごとに\\x00を送る。
+    """secs秒間受信する。keepaliveがTrueなら1秒ごとにENTER_COMMを送る
+    (厳密FSM(Step C2)ではIDLE->ACTIVEの復帰根拠は明示コマンドのみなので、
+    以前のような無害な\\x00バイトでは復帰しない)。
     戻り値: (statusフレーム数, audioフレーム数, 最後のStatus, tof_mmの異なり数,
              tof_okがTrueだったフレーム数, tof_okがFalseだったフレーム数)"""
     t_end = time.time() + secs
@@ -53,7 +60,7 @@ def collect(ser, parser, secs: float, keepalive: bool):
     tof_ok_count = tof_dead_count = 0
     while time.time() < t_end:
         if keepalive and time.time() >= next_ka:
-            ser.write(b"\x00")
+            ser.write(protocol.build_frame(protocol.CMD_ENTER_COMM, 0))
             next_ka += 1.0
         for item in parser.feed(ser.read(16384)):
             if item[0] != "frame":
@@ -127,7 +134,7 @@ def main() -> int:
 
         # 5) OTA照会
         print("5) OTA状態照会(CMD_STATUS_REQ -> CMD_STATUS_RESP)")
-        ser.write(b"\x00")  # 念のため起こす
+        ser.write(protocol.build_frame(protocol.CMD_ENTER_COMM, 0))  # 念のため起こす
         time.sleep(0.2)
         ser.write(protocol.build_frame(protocol.CMD_STATUS_REQ, 0, b""))
         got_resp = False

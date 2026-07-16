@@ -411,6 +411,7 @@ class StatusMonitorApp:
     def _toggle_connect(self) -> None:
         if self.transport is not None:
             self._set_stream(False)
+            self._send_stop_comm()
             self.transport.stop()
             self.transport = None
             self.connect_btn.configure(text="接続")
@@ -438,6 +439,10 @@ class StatusMonitorApp:
         self.radio_vars["link"].set(link)
         self.transport.start()
         self.connect_btn.configure(text="切断")
+        if self.keep_awake:
+            # 厳密FSM(Step C2): IDLEからの復帰は明示コマンドのみが根拠になる。
+            # 接続直後に一度送り、以後は _update_rate の1Hzループが送り続ける。
+            self._send_enter_comm()
         if link == "BLE":
             # BLE can't stream PCM live, but the record button drives the
             # SRAM-buffered record-then-send flow (_toggle_record_ble)
@@ -448,8 +453,13 @@ class StatusMonitorApp:
     # ---------------- low-power (Phase E) ----------------
     def _on_keep_awake_toggle(self) -> None:
         self.keep_awake = self.keep_awake_var.get()
-        # When turning keep-awake off, the board will idle within ~3 s; when
-        # turning it on, the next 1 Hz keep-alive wakes it back to ACTIVE.
+        if self.keep_awake:
+            # 明示的に今すぐ起こす(次の1Hzループを待たない)。
+            self._send_enter_comm()
+        else:
+            # 明示的なACTIVE->IDLEヒント。送らなくても無通信タイムアウトで
+            # いずれIDLEに落ちるが、すぐに低電力へ倒したい場合のため。
+            self._send_stop_comm()
 
     # ---------------- state-machine controls ----------------
     def _sync_time(self) -> None:
@@ -478,6 +488,22 @@ class StatusMonitorApp:
             self._log("待機コマンド(LINK_STANDBY)を送信")
         else:
             self._log("待機: この接続方式では送信できません")
+
+    def _send_enter_comm(self) -> None:
+        """厳密FSM(Step C2)向け: ボードのIDLE->ACTIVE遷移を許可する唯一の根拠。
+        任意のバイトでは復帰しなくなったため、接続直後と _update_rate の1Hz
+        ループから送る(旧NULキープアライブの置き換え)。"""
+        if self.transport is None:
+            return
+        frame = protocol.build_frame(protocol.CMD_ENTER_COMM, 0)
+        self.transport.write(frame)
+
+    def _send_stop_comm(self) -> None:
+        """明示的なACTIVE->IDLEヒント。切断時と「常時ACTIVE維持」オフ時に送る。"""
+        if self.transport is None:
+            return
+        frame = protocol.build_frame(protocol.CMD_STOP_COMM, 0)
+        self.transport.write(frame)
 
     # ---------------- audio controls ----------------
     def _set_stream(self, enable: bool) -> None:
@@ -640,11 +666,12 @@ class StatusMonitorApp:
         self._tree_set("_crc", str(self.parser.crc_errors))
         self._tree_set("_audio_frames", str(self.audio_frames))
 
-        # Phase E: keep the board awake (1 Hz keep-alive) and reflect its
-        # low-power state. The firmware counts ANY inbound byte as host
-        # activity, so a single harmless byte per second holds it in ACTIVE.
+        # Phase E / Step C2: keep the board awake and reflect its low-power
+        # state. The strict flag-driven FSM only leaves IDLE on an explicit
+        # ENTER_COMM command - a plain NUL byte no longer has wake power, so
+        # send ENTER_COMM once per second while "keep awake" is on.
         if self.transport is not None and self.keep_awake:
-            self.transport.write(b"\x00")  # NUL: not a console command, just activity
+            self._send_enter_comm()
         if self.transport is None:
             self.power_state = "?"
         elif rate > 0:

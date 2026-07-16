@@ -86,3 +86,18 @@ void Secure_ConfirmBoot(void)
 {
   BootGuard_ConfirmBoot();
 }
+
+void Comm_SetDeviceState(uint32_t state)
+{
+  CommBridge_SetDeviceState(state);
+}
+
+uint32_t Comm_TakeExplicitWake(void)
+{
+  return CommBridge_TakeExplicitWake();
+}
+
+uint32_t Comm_TakeStopRequested(void)
+{
+  return CommBridge_TakeStopRequested();
+}

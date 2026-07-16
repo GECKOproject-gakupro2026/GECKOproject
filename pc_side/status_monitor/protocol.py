@@ -28,6 +28,8 @@ CMD_REC_CHUNK = 0x0B    # board->PC: raw TLV [cmd][seq u16][adpcm], not frame_co
 CMD_REC_END = 0x0C      # board->PC: raw TLV [cmd][total_samples u32][crc16], not frame_codec
 CMD_LINK_STANDBY = 0x0D # PC->board: end/idle the sending link
 CMD_TIME_SYNC = 0x0E    # PC->board: u32 Unix epoch seconds (LE)
+CMD_ENTER_COMM = 0x0F   # PC->board: explicit IDLE->ACTIVE wake request
+CMD_STOP_COMM = 0x10    # PC->board: explicit ACTIVE->IDLE hint
 CMD_ACK = 0x7E          # "<BBI" orig_cmd/orig_seq/arg
 CMD_NACK = 0x7F         # "<BBB" orig_cmd/orig_seq/error
 

@@ -155,6 +155,26 @@ CMSE_NS_ENTRY void Comm_SetDeviceState(uint32_t state)
 }
 
 /**
+  * @brief  Additive gateway (Step C2, strict flag-driven FSM): consumes the
+  *         one-shot flag set by an inbound FRAME_CMD_ENTER_COMM. Returns
+  *         non-zero exactly once per received command, then clears it - the
+  *         only way app_state.c's wake_requested() may leave IDLE.
+  */
+CMSE_NS_ENTRY uint32_t Comm_TakeExplicitWake(void)
+{
+  return CommBridge_TakeExplicitWake();
+}
+
+/**
+  * @brief  Additive gateway (Step C2): consumes the one-shot flag set by an
+  *         inbound FRAME_CMD_STOP_COMM (explicit ACTIVE->IDLE hint).
+  */
+CMSE_NS_ENTRY uint32_t Comm_TakeStopRequested(void)
+{
+  return CommBridge_TakeStopRequested();
+}
+
+/**
   * @brief  Link status bits: 0=BLE alive, 1=WiFi up, 2=BLE conn, 3=TCP client.
   */
 CMSE_NS_ENTRY uint32_t Comm_GetLinkStatus(void)

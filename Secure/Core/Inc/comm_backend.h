@@ -74,6 +74,14 @@ void BootGuard_ConfirmBoot(void);
  * MiniStatus.flags のbit3-4と状態遷移ログに反映する。 */
 void CommBridge_SetDeviceState(uint32_t state);
 
+/* 【追加・厳密FSM(Step C2)】FRAME_CMD_ENTER_COMM / FRAME_CMD_STOP_COMM 受信で
+ * 立つ一回消費フラグ。呼び出す毎にクリアされる(Comm_PollHostCommand と同じ
+ * consume-once の作法)。NonSecure の wake_requested() が
+ * CommBridge_TakeExplicitWake() != 0 を「明示的なIDLE離脱要求」の唯一の根拠
+ * として使う - 通常のトラフィック(nsActivity)ではIDLEから出られない。 */
+uint32_t CommBridge_TakeExplicitWake(void);
+uint32_t CommBridge_TakeStopRequested(void);
+
 #ifdef __cplusplus
 }
 #endif

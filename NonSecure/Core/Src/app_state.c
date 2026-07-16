@@ -61,15 +61,19 @@ static int idle_entry_allowed(const AppStateCtx_t *ctx, uint32_t now_ms, uint32_
   return timedOut && !linkActive;
 }
 
-/* IDLEから抜けてよいか(=IDLEからACTIVEへの遷移条件)。単純に
- * idle_entry_allowed() の否定を使うのではなく、専用の判定として分離しておく:
- * 意味的には同じ式(「タイムアウトしておらず、または、リンクがアクティブ」)だが、
- * こうしておくことで将来「入る条件」と「出る条件」が非対称になる変更(例:
- * 出る条件だけを明示コマンドに限定するStep C2)を、この関数の中身だけ差し替えれば
- * 済むようにする。現時点では動作は idle_entry_allowed() の否定と同一。 */
+/* IDLEから抜けてよいか(=IDLEからACTIVEへの遷移条件、Step C2で厳密化)。
+ * 通常のトラフィック(nsActivity/lastActivityMs)はIDLEに居続ける根拠にはならない
+ * - 一度IDLEに入ったら、UARTの明示コマンド(FRAME_CMD_ENTER_COMM)か、ファーム
+ * ウェア自身が張ったリンク(BLE central接続やTCPクライアント接続)がない限り、
+ * IDLEを維持し続ける(ユーザー要求「一度待機状態に入れば...維持し続ける」)。
+ * Comm_TakeExplicitWake() は一回消費フラグなので、呼ぶのはこの判定の中だけ。 */
 static int wake_requested(const AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 {
-  return !idle_entry_allowed(ctx, now_ms, linkStatus);
+  (void)ctx;
+  (void)now_ms;
+  int linkActive = (linkStatus & (LINK_BIT_BLE_CONNECTED | LINK_BIT_TCP_CLIENT)) != 0U;
+  int explicitWake = (Comm_TakeExplicitWake() != 0U);
+  return explicitWake || linkActive;
 }
 
 void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
@@ -105,7 +109,12 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 
     case STATE_ACTIVE_ACQUIRE:
     case STATE_ACTIVE_COMM:
-      if (idle_entry_allowed(ctx, now_ms, linkStatus))
+    {
+      /* 両方を必ず評価してフラグを消費する(短絡評価でTakeStopRequestedが
+       * 呼ばれ損ねないように、先に変数へ受けてからORする)。 */
+      int timedOutIdle = idle_entry_allowed(ctx, now_ms, linkStatus);
+      int stopRequested = (Comm_TakeStopRequested() != 0U);
+      if (timedOutIdle || stopRequested)
       {
         /* IDLEへ: 電力を食う ToF だけ SLEEP。通信は低頻度で継続。 */
         ctx->state = STATE_IDLE;
@@ -122,6 +131,7 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
         Board_LedGreenToggle(); /* 緑 ハートビート */
       }
       break;
+    }
 
     default:
       /* 不明/エラー状態: 待機へフォールバック(要求1)。 */

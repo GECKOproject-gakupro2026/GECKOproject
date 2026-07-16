@@ -35,6 +35,8 @@ enum class Event : uint8_t
   CommReturn    = 8,  /* 通信(送信)処理が戻った: ret=所要ms */
   DeviceActive  = 9,  /* デバイス機械 IDLE->ACTIVE (Step6以降) */
   DeviceIdle    = 10, /* デバイス機械 ACTIVE->IDLE (Step6以降) */
+  EnterComm     = 11, /* ENTER_COMMコマンド受信(厳密FSMの明示ウェイク要求) */
+  StopComm      = 12, /* STOP_COMMコマンド受信(明示ACTIVE->IDLEヒント) */
 };
 
 /* 1レコード: 記録時のtick(ms)、イベント、任意の戻り値/付随値。

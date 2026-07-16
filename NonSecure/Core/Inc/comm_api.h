@@ -69,6 +69,15 @@ void Secure_ConfirmBoot(void);
  * 2=ACTIVE_COMM)。状態が変化した時にだけ呼べば十分。 */
 void Comm_SetDeviceState(uint32_t state);
 
+/* 【追加ゲートウェイ・厳密FSM(Step C2)】 通信サービスがPC側から受け取った
+ * FRAME_CMD_ENTER_COMM / FRAME_CMD_STOP_COMM を一回消費フラグとして公開する。
+ * 呼ぶ度にフラグはクリアされる(Comm_PollHostCommandと同じ作法)。
+ * 戻り値: 1=直近にそのコマンドを受信した(このコール1回分のみ)、0=無し。
+ * app_state.c の wake_requested() は Comm_TakeExplicitWake() を、IDLEを
+ * 離れてよい**唯一**の根拠として使う(通常の受信バイトは根拠にならない)。 */
+uint32_t Comm_TakeExplicitWake(void);
+uint32_t Comm_TakeStopRequested(void);
+
 #ifdef __cplusplus
 }
 #endif
