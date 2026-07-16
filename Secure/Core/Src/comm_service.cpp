@@ -686,13 +686,20 @@ void Service::poll()
      * IDLE but never leave it. Idle means nothing to serve over TCP anyway;
      * the console/BLE wake paths stay live. */
 
-    /* While another link is the active one (here: a BLE central), stretch the
-     * no-client TCP accept poll: its ~300 ms module-side block otherwise stalls
-     * the 10 Hz BLE notify every ~5 s (the "momentary freeze"). A connected TCP
-     * client is unaffected (recv path, not accept). When no other link is
-     * active, keep the normal 5 s cadence so a fresh TCP client still connects
-     * promptly. Driven by the per-link state machine, not a bare IsConnected(). */
-    const bool otherLinkActive = (bleLink_.state == LinkState::Active);
+    /* Link exclusivity: while another WiFi/BLE link is the active one, stretch
+     * the no-client TCP accept poll so its ~300 ms module-side block cannot
+     * stall the active link (this is what removed the 10 Hz BLE "freeze").
+     * BLE Active is the case that matters here; a TCP client already connected
+     * takes the recv path (accept isn't run), so including tcpLink_ is just for
+     * symmetry/readability. When no other link is active, keep the normal 5 s
+     * cadence so a fresh TCP client still connects promptly.
+     *
+     * UART is deliberately NOT part of this exclusivity: it is DMA-driven and
+     * always allowed to interrupt (its bytes are drained unconditionally at the
+     * top of poll() and mark uartLink_ Active), so UART commands take effect
+     * immediately regardless of which link is otherwise active. */
+    const bool otherLinkActive = (bleLink_.state == LinkState::Active) ||
+                                 (tcpLink_.state == LinkState::Active);
     comm_wifi::SetAcceptInterval(otherLinkActive ? 60000U : 5000U);
     uint32_t t0 = HAL_GetTick();
     pollTcp();
