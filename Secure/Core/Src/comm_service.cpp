@@ -447,6 +447,35 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
                    reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
       break;
     }
+    case FRAME_CMD_TIME_SYNC:
+    {
+      /* PC sends the current Unix epoch (u32 seconds, LE). There is no RTC on
+       * the U585, so store an offset relative to the millisecond uptime:
+       *   epochOffsetMs = pc_epoch*1000 - HAL_GetTick()
+       *   wall_ms       = epochOffsetMs + HAL_GetTick()   (used by state_log)
+       * The offset lives in the SRAM log module and is lost on reset (re-sync
+       * needed). */
+      if (len >= 4U)
+      {
+        uint32_t epochSec = static_cast<uint32_t>(payload[0]) |
+                            (static_cast<uint32_t>(payload[1]) << 8) |
+                            (static_cast<uint32_t>(payload[2]) << 16) |
+                            (static_cast<uint32_t>(payload[3]) << 24);
+        uint32_t offsetMs = epochSec * 1000U - HAL_GetTick();
+        state_log::SetEpochOffset(offsetMs);
+        state_log::Push(state_log::Event::None, epochSec); /* mark the sync */
+        AckPayload ack = {cmd, seq, epochSec};
+        sendResponse(fromTcp, FRAME_CMD_ACK,
+                     reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
+      }
+      else
+      {
+        NackPayload nack = {cmd, seq, FRAME_ERR_BAD_STATE};
+        sendResponse(fromTcp, FRAME_CMD_NACK,
+                     reinterpret_cast<const uint8_t *>(&nack), sizeof(nack));
+      }
+      break;
+    }
     default:
       break; /* unknown inbound command: ignore */
   }
