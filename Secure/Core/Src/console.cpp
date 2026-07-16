@@ -65,13 +65,36 @@ size_t dmaWriteIndex()
   return (kRxBufSize - remaining) % kRxBufSize;
 }
 
+/* USART1's own overrun error (ORE, ISR bit 3) latches when the peripheral's
+ * 1-byte RDR shift register receives a new byte before the previous one was
+ * read out - which happens here because DMA (not software) drains RDR, and a
+ * single momentary DMA/bus stall is enough to trip it. Once ORE is set, the
+ * hardware BLOCKS FURTHER RECEPTION until software clears it (writing
+ * ORECF/FECF/NECF in ICR) - this was the RX-killer actually observed on
+ * hardware: CBR1 froze at 0x3FF (exactly one byte written, ever) with
+ * ISR.ORE=1 forever after, because nothing in this codebase ever cleared it.
+ * Ack it every time this runs so a transient overrun costs at most the bytes
+ * caught in the race, never permanent RX death. */
+void clearUartRxErrors()
+{
+  constexpr uint32_t kErrFlags = USART_ICR_ORECF | USART_ICR_FECF | USART_ICR_NECF |
+                                 USART_ICR_PECF;
+  if ((huart1.Instance->ISR & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE | USART_ISR_PE)) != 0U)
+  {
+    huart1.Instance->ICR = kErrFlags;
+  }
+}
+
 /* Re-samples the DMA write pointer and folds the newly-written distance into
  * rxPending. If more than a full buffer's worth of bytes arrived since the
  * last sample (the ring lapped rxTail), that window was overwritten before
  * it could be read: count it as an overrun and resync rxTail to the current
- * write position rather than keep replaying stale/torn bytes. */
+ * write position rather than keep replaying stale/torn bytes. This is a
+ * second, independent RX-starvation path from the ORE latch above - both are
+ * fixed here since either alone reproduced the user-visible symptom. */
 void refreshPending()
 {
+  clearUartRxErrors();
   static size_t lastHead = 0;
   size_t head = dmaWriteIndex();
   size_t advanced = (head - lastHead) % kRxBufSize;
