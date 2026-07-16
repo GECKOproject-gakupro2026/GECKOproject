@@ -152,6 +152,11 @@ class StatusMonitorApp:
         self.power_var = tk.StringVar(value="電源: ?")
         ttk.Label(top, textvariable=self.power_var).pack(side="left", padx=4)
 
+        # 時刻同期: PCのUnix時刻をボードへ送る(epochオフセット方式)。
+        ttk.Button(top, text="時刻同期", command=self._sync_time).pack(side="left", padx=4)
+        # 待機: アクティブなリンクをIDLEへ落とす(LINK_STANDBY)。
+        ttk.Button(top, text="待機", command=self._send_standby).pack(side="left", padx=4)
+
         self.rate_var = tk.StringVar(value="0 fps")
         ttk.Label(top, textvariable=self.rate_var).pack(side="right")
         self._update_target_hint()
@@ -440,6 +445,34 @@ class StatusMonitorApp:
         self.keep_awake = self.keep_awake_var.get()
         # When turning keep-awake off, the board will idle within ~3 s; when
         # turning it on, the next 1 Hz keep-alive wakes it back to ACTIVE.
+
+    # ---------------- state-machine controls ----------------
+    def _sync_time(self) -> None:
+        """PCのUnix時刻(u32秒 LE)をボードへ送る。ボードはRTC非搭載なので
+        offset = pc_epoch*1000 - uptime_ms を保持し、以降 wall = offset+uptime。
+        既存の keep-alive(self.transport.write)と同じ送信経路を使う。"""
+        import time as _time
+        if self.transport is None:
+            self._log("時刻同期: 未接続")
+            return
+        epoch = int(_time.time())
+        frame = protocol.build_frame(protocol.CMD_TIME_SYNC, 0, struct.pack("<I", epoch))
+        if self.transport.write(frame):
+            self._log(f"時刻同期を送信: {epoch} "
+                      f"({_time.strftime('%Y-%m-%d %H:%M:%S', _time.localtime(epoch))})")
+        else:
+            self._log("時刻同期: この接続方式では送信できません")
+
+    def _send_standby(self) -> None:
+        """アクティブなリンクをIDLEへ落とす(LINK_STANDBY)。次の通信で再Active。"""
+        if self.transport is None:
+            self._log("待機: 未接続")
+            return
+        frame = protocol.build_frame(protocol.CMD_LINK_STANDBY, 0)
+        if self.transport.write(frame):
+            self._log("待機コマンド(LINK_STANDBY)を送信")
+        else:
+            self._log("待機: この接続方式では送信できません")
 
     # ---------------- audio controls ----------------
     def _set_stream(self, enable: bool) -> None:
