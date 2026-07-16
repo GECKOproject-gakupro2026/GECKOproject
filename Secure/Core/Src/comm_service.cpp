@@ -763,15 +763,24 @@ void Service::poll()
   if (telemetryEnabled && static_cast<int32_t>(now - nextBleTick_) >= 0)
   {
     nextBleTick_ += kBlePeriodMs;
-    uint32_t t0 = HAL_GetTick();
-    comm_ble::SendStatus(status_);
-    uint32_t dt = HAL_GetTick() - t0;
-    profBle += dt;
-    /* Record the BLE comm-cycle return time/duration. Step 7's NonSecure
-     * cadence scheduler and log read-out use this to keep PC arrival steady. */
-    if (bleLink_.state == LinkState::Active)
+    /* Give a BLE audio transfer the notify link (and UART4) to itself: while
+     * PumpRecTx() is draining a recording, skip SendStatus() entirely instead
+     * of interleaving 10 Hz sensor notifies with REC_CHUNK notifies on the
+     * same fe42 characteristic / blocking UART4 AT transmit. nextBleTick_
+     * still advances on schedule so telemetry resumes at the normal cadence
+     * (no backlog burst) the moment the recording finishes. */
+    if (!comm_ble::IsRecTxActive())
     {
-      state_log::Push(state_log::Event::CommReturn, dt);
+      uint32_t t0 = HAL_GetTick();
+      comm_ble::SendStatus(status_);
+      uint32_t dt = HAL_GetTick() - t0;
+      profBle += dt;
+      /* Record the BLE comm-cycle return time/duration. Step 7's NonSecure
+       * cadence scheduler and log read-out use this to keep PC arrival steady. */
+      if (bleLink_.state == LinkState::Active)
+      {
+        state_log::Push(state_log::Event::CommReturn, dt);
+      }
     }
   }
   if (telemetryEnabled)

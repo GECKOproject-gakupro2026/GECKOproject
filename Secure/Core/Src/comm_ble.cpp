@@ -199,7 +199,13 @@ void PumpRecTx()
   }
 
   constexpr uint32_t kChunkPayload = 58U;
-  constexpr uint32_t kChunksPerPump = 2U; /* ~200 ms/notify at 9600 baud */
+  /* Was 2 (~200 ms/notify at the original 9600 baud). The control UART is now
+   * 115200 (~12x faster; see comm_ble::Init()/CFG_BLE_BAUDRATE), and
+   * Service::poll() now suppresses SendStatus() for the whole recording drain
+   * (see comm_service.cpp's IsRecTxActive() gate) so this pump no longer has
+   * to share the fe42 notify link/UART4 with 10 Hz sensor telemetry - it can
+   * safely push more chunks per call. */
+  constexpr uint32_t kChunksPerPump = 8U;
 
   for (uint32_t i = 0; i < kChunksPerPump; i++)
   {
@@ -267,6 +273,8 @@ void StartRecTx()
   bleRecSendPending = true;
   bleRecOff = 0;
 }
+
+bool IsRecTxActive() { return bleRecSendPending; }
 
 } // namespace comm_ble
 

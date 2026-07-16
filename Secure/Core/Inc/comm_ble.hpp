@@ -47,6 +47,11 @@ bool TakeHostActivity();
  * Service::poll()がrecorder::Stop()を呼んだ直後に呼ぶ。 */
 void StartRecTx();
 
+/* PumpRecTx()が録音データをまだ送信中(=bleRecSendPendingが立っている)か。
+ * Service::poll()がこれを見てSendStatus(センサーテレメトリ)を一時停止し、
+ * 音声送信の間はBLEの notify リンクを占有できるようにする。 */
+bool IsRecTxActive();
+
 } // namespace comm_ble
 
 #endif /* COMM_BLE_HPP */
