@@ -46,13 +46,25 @@ void AppState_Init(AppStateCtx_t *ctx, uint32_t now_ms)
   ctx->haveAcquired = 0U;
 }
 
-/* IDLEに入ってよいか: 無通信タイムアウト経過 かつ どのリンクもアクティブでない。
- * リンクが張られている間はIDLEに落とさない(要求2/3の調停)。 */
-static int idle_allowed(const AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
+/* IDLEに入ってよいか(=ACTIVEからIDLEへの遷移条件): 無通信タイムアウト経過
+ * かつ どのリンクもアクティブでない。リンクが張られている間はIDLEに落とさない
+ * (要求2/3の調停)。 */
+static int idle_entry_allowed(const AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 {
   int timedOut = (int32_t)(now_ms - ctx->lastActivityMs) >= (int32_t)CFG_IDLE_TIMEOUT_MS;
   int linkActive = (linkStatus & (LINK_BIT_BLE_CONNECTED | LINK_BIT_TCP_CLIENT)) != 0U;
   return timedOut && !linkActive;
+}
+
+/* IDLEから抜けてよいか(=IDLEからACTIVEへの遷移条件)。単純に
+ * idle_entry_allowed() の否定を使うのではなく、専用の判定として分離しておく:
+ * 意味的には同じ式(「タイムアウトしておらず、または、リンクがアクティブ」)だが、
+ * こうしておくことで将来「入る条件」と「出る条件」が非対称になる変更(例:
+ * 出る条件だけを明示コマンドに限定するStep C2)を、この関数の中身だけ差し替えれば
+ * 済むようにする。現時点では動作は idle_entry_allowed() の否定と同一。 */
+static int wake_requested(const AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
+{
+  return !idle_entry_allowed(ctx, now_ms, linkStatus);
 }
 
 void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
@@ -66,7 +78,7 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
   switch (ctx->state)
   {
     case STATE_IDLE:
-      if (!idle_allowed(ctx, now_ms, linkStatus))
+      if (wake_requested(ctx, now_ms, linkStatus))
       {
         /* 活動あり or リンクアクティブ: ACTIVEへ復帰し ToF ranging 再開。
          * COMMサイクルを now から仕切り直す(過去の nextCommMs でバーストしない)。 */
@@ -88,7 +100,7 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 
     case STATE_ACTIVE_ACQUIRE:
     case STATE_ACTIVE_COMM:
-      if (idle_allowed(ctx, now_ms, linkStatus))
+      if (idle_entry_allowed(ctx, now_ms, linkStatus))
       {
         /* IDLEへ: 電力を食う ToF だけ SLEEP。通信は低頻度で継続。 */
         ctx->state = STATE_IDLE;
