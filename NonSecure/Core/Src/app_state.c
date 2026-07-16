@@ -42,6 +42,8 @@ void AppState_Init(AppStateCtx_t *ctx, uint32_t now_ms)
   ctx->nextTelemetryMs = now_ms;
   ctx->nextLedMs = now_ms;
   ctx->commReturnMs = now_ms;
+  ctx->nextCommMs = now_ms;
+  ctx->haveAcquired = 0U;
 }
 
 /* IDLEに入ってよいか: 無通信タイムアウト経過 かつ どのリンクもアクティブでない。
@@ -66,12 +68,15 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
     case STATE_IDLE:
       if (!idle_allowed(ctx, now_ms, linkStatus))
       {
-        /* 活動あり or リンクアクティブ: ACTIVEへ復帰し ToF ranging 再開。 */
+        /* 活動あり or リンクアクティブ: ACTIVEへ復帰し ToF ranging 再開。
+         * COMMサイクルを now から仕切り直す(過去の nextCommMs でバーストしない)。 */
         ctx->state = STATE_ACTIVE_COMM;
         Sensors_Resume();
         Board_LedRedOff();
         ctx->nextTelemetryMs = now_ms;
         ctx->nextLedMs = now_ms;
+        ctx->nextCommMs = now_ms;
+        ctx->haveAcquired = 0U;
       }
       else if ((int32_t)(now_ms - ctx->nextLedMs) >= 0)
       {
@@ -112,14 +117,50 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
       break;
   }
 
-  /* テレメトリは両モードで送る(周期だけ違う)。旧 App_Run と同一。 */
-  uint32_t telemetryPeriodMs =
-      (ctx->state == STATE_IDLE) ? CFG_IDLE_TELEMETRY_MS : CFG_ACTIVE_TELEMETRY_MS;
-  if ((int32_t)(now_ms - ctx->nextTelemetryMs) >= 0)
+  if (ctx->state == STATE_IDLE)
   {
-    ctx->nextTelemetryMs = now_ms + telemetryPeriodMs;
-    build_status(&ctx->st);
+    /* IDLE: 低頻度で送るだけ(取得と送信を分けるほどの精度は不要)。 */
+    if ((int32_t)(now_ms - ctx->nextTelemetryMs) >= 0)
+    {
+      ctx->nextTelemetryMs = now_ms + CFG_IDLE_TELEMETRY_MS;
+      build_status(&ctx->st);
+      (void)Comm_SendTelemetry(&ctx->st);
+      ctx->commReturnMs = HAL_GetTick();
+    }
+    /* IDLE中は次回ACTIVE突入時に取得し直す。 */
+    ctx->haveAcquired = 0U;
+    return;
+  }
+
+  /* ACTIVE: COMM -> ACQUIRE -> WAIT サイクル(要求4)。
+   *  - COMM   : nextCommMs に達したら送信し、戻り時刻を記録。次回送信予定を
+   *             「今回の戻り + 周期」に張る(前回の戻り基準なので、取得や送信に
+   *             かかった時間の揺らぎを吸収し、PC到達が一定周期になる)。
+   *  - ACQUIRE: 送信直後に次フレーム用センサーを読む。読取に時間がかかっても
+   *             次のCOMM時刻は既に確定しているので到達周期はぶれない。
+   *  - WAIT   : 何もしない期間(nextCommMs まで)。ループは回り続ける。 */
+  if ((int32_t)(now_ms - ctx->nextCommMs) >= 0)
+  {
+    /* --- COMM --- */
+    if (!ctx->haveAcquired)
+    {
+      /* 初回や IDLE 復帰直後: 送信前に一度取得しておく。 */
+      build_status(&ctx->st);
+    }
     (void)Comm_SendTelemetry(&ctx->st);
-    ctx->commReturnMs = HAL_GetTick(); /* COMM戻り時刻(Step7で使用) */
+    ctx->commReturnMs = HAL_GetTick();
+    ctx->state = STATE_ACTIVE_COMM;
+
+    /* 次回COMMは「前回の戻り + 周期」。大きく遅延したらバースト回避で resync。 */
+    ctx->nextCommMs += CFG_COMM_PERIOD_MS;
+    if ((int32_t)(ctx->commReturnMs - ctx->nextCommMs) > (int32_t)CFG_COMM_PERIOD_MS)
+    {
+      ctx->nextCommMs = ctx->commReturnMs + CFG_COMM_PERIOD_MS;
+    }
+
+    /* --- ACQUIRE --- 次フレーム用スナップショットを先読み。 */
+    build_status(&ctx->st);
+    ctx->haveAcquired = 1U;
+    ctx->state = STATE_ACTIVE_ACQUIRE;
   }
 }

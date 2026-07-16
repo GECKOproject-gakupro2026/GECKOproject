@@ -39,9 +39,11 @@ typedef struct
 {
   AppState_t state;
   uint32_t   lastActivityMs;   /* 最後にトリガーが立った時刻 */
-  uint32_t   nextTelemetryMs;  /* 次にテレメトリを送る時刻 */
+  uint32_t   nextTelemetryMs;  /* 次にテレメトリを送る時刻(IDLE周期用) */
   uint32_t   nextLedMs;        /* 次にLEDをトグルする時刻 */
-  uint32_t   commReturnMs;     /* 直近のCOMM(送信)が戻った時刻(Step7で使用) */
+  uint32_t   commReturnMs;     /* 直近のCOMM(送信)が戻った時刻 */
+  uint32_t   nextCommMs;       /* 次にCOMM(送信)する時刻(前回戻り+周期で算出) */
+  uint8_t    haveAcquired;     /* ACQUIRE済み(次回送信用スナップショットが新鮮) */
   FullStatus_t st;             /* 最新スナップショット(Trigger_Poll にも渡す) */
 } AppStateCtx_t;
 
