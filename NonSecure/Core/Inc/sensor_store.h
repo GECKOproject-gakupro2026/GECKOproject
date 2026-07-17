@@ -25,6 +25,10 @@ void SensorStore_Init(void);
  * 保管庫を上書きする。旧 app_state.c の build_status() の実体。 */
 void SensorStore_AcquireAll(void);
 
+/* IDLE用の例外取得: トリガー判定に要る照度・音圧だけを更新する。
+ * IDLE中は他のセンサー(env/motion/tof/MCU情報)を触らない。 */
+void SensorStore_AcquireTriggerInputs(void);
+
 /* データ送信状態: 保管庫の現在値をそのまま返す(取得はしない)。 */
 const FullStatus_t *SensorStore_GetForSend(void);
 

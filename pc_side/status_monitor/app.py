@@ -156,8 +156,9 @@ class StatusMonitorApp:
         self.power_var = tk.StringVar(value="電源: ?")
         ttk.Label(top, textvariable=self.power_var).pack(side="left", padx=4)
 
-        # デバイス状態機械の表示(BLE経由のMiniStatus.flags bit3-4のみに載る。
-        # UART/TCP接続時は情報源が無いため "-" のまま)。
+        # デバイス状態機械の表示。ACTIVE中はMiniStatus.flags bit3-4(BLE)/
+        # decode_status(UART/TCP)から、IDLE中はCMD_IDLE_BEACON(全リンク共通)
+        # から更新される。
         self.dev_state_var = tk.StringVar(value="状態: -")
         ttk.Label(top, textvariable=self.dev_state_var).pack(side="left", padx=4)
 
@@ -530,6 +531,17 @@ class StatusMonitorApp:
         frame = protocol.build_frame(protocol.CMD_LOG_REQ, 0, struct.pack("<I", start_index))
         self.transport.write(frame)
 
+    def _on_idle_beacon(self, body: bytes) -> None:
+        """CMD_IDLE_BEACON: IDLE中の生存確認+状態通知(センサー値は載らない)。
+        state-machine rebuild後はIDLEでセンサーを取得も送信もしないので、
+        代わりにこれで状態ラベルとfpsカウンタ用のframe_countを更新する。"""
+        uptime_ms, device_state = protocol.decode_idle_beacon(body)
+        self.frame_count += 1
+        label = self.DEVICE_STATE_LABELS.get(device_state, f"?({device_state})")
+        self.dev_state_var.set(f"状態: {label}")
+        secs = uptime_ms // 1000
+        self.uptime_var.set(f"{secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}")
+
     def _on_log_resp(self, body: bytes) -> None:
         start_index, records = protocol.decode_log_resp(body)
         self.log_records.extend(records)
@@ -708,6 +720,9 @@ class StatusMonitorApp:
                             continue
                         if cmd == protocol.CMD_LOG_RESP:
                             self._on_log_resp(body)
+                            continue
+                        if cmd == protocol.CMD_IDLE_BEACON:
+                            self._on_idle_beacon(body)
                             continue
                         if cmd == protocol.CMD_ACK:
                             continue  # 個別のコマンド成功応答(現状は無視でよい)

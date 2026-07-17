@@ -4,9 +4,12 @@
   * @brief   デバイス状態機械(IDLE / ACTIVE)【コア層・基板非依存】。
   *
   *          app_loop.c から抽出したデバイス級のステートマシン。IDLEは
-  *          「トリガー待機」状態で、通信は沈黙させず ToF だけ SLEEP させる
-  *          (既存 App_Run の設計を踏襲)。ACTIVE は取得(ACQUIRE)と通信
-  *          (COMM)のサブサイクルを持つ。
+  *          「トリガー待機」状態: UART DMA・フラグ・BLE/WiFiコマンドの待機
+  *          以外は行わない。センサーの取得も送信もしない(例外: 照度・音圧の
+  *          みトリガー判定用に取得する)。ToFはSLEEP。低頻度の
+  *          FRAME_CMD_IDLE_BEACON だけを送り、PC側にセンサーデータではなく
+  *          「生きているがIDLE」であることを伝える。ACTIVE は取得(ACQUIRE)
+  *          と通信(COMM)のサブサイクルを持つ。
   *
   *          このヘッダは HAL も BSP も知らない。時刻(now_ms)と、リンク状態
   *          ビット(Comm_GetLinkStatus 相当)を引数で受け取り、LED/センサー/
@@ -31,7 +34,8 @@ extern "C" {
  * IDLE / ACTIVE の2つ。不明値は AppState_Tick 内の default で IDLE に落ちる。 */
 typedef enum
 {
-  STATE_IDLE          = 0, /* 待機: 赤LED遅点滅・ToF SLEEP・通信は低頻度で継続 */
+  STATE_IDLE          = 0, /* 待機: 赤LED遅点滅・ToF SLEEP・センサー取得/送信
+                               なし(照度/音圧は例外)・IDLE_BEACONのみ低頻度送信 */
   STATE_ACTIVE_ACQUIRE = 1, /* 稼働(取得): 次フレーム用にセンサーを読む */
   STATE_ACTIVE_COMM    = 2, /* 稼働(通信): テレメトリを送る */
 } AppState_t;
@@ -42,7 +46,7 @@ typedef struct
 {
   AppState_t state;
   uint32_t   lastActivityMs;   /* 最後にトリガーが立った時刻 */
-  uint32_t   nextTelemetryMs;  /* 次にテレメトリを送る時刻(IDLE周期用) */
+  uint32_t   nextBeaconMs;     /* 次にIDLE_BEACONを送る時刻(IDLE周期用) */
   uint32_t   nextLedMs;        /* 次にLEDをトグルする時刻 */
   uint32_t   commReturnMs;     /* 直近のCOMM(送信)が戻った時刻 */
   uint32_t   nextCommMs;       /* 次にCOMM(送信)する時刻(前回戻り+周期で算出) */

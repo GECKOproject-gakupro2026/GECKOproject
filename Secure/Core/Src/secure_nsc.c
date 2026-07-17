@@ -175,6 +175,15 @@ CMSE_NS_ENTRY uint32_t Comm_TakeStopRequested(void)
 }
 
 /**
+  * @brief  Additive gateway (state-machine rebuild): IDLE中の生存確認+状態
+  *         通知ビーコンを送る。スカラー引数のみなのでポインタ検証は不要。
+  */
+CMSE_NS_ENTRY void Comm_SendIdleBeacon(uint32_t state)
+{
+  CommBridge_SendIdleBeacon(state);
+}
+
+/**
   * @brief  Link status bits: 0=BLE alive, 1=WiFi up, 2=BLE conn, 3=TCP client.
   */
 CMSE_NS_ENTRY uint32_t Comm_GetLinkStatus(void)

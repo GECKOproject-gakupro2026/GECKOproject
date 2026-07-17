@@ -101,3 +101,8 @@ uint32_t Comm_TakeStopRequested(void)
 {
   return CommBridge_TakeStopRequested();
 }
+
+void Comm_SendIdleBeacon(uint32_t state)
+{
+  CommBridge_SendIdleBeacon(state);
+}

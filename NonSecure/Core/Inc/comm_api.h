@@ -78,6 +78,12 @@ void Comm_SetDeviceState(uint32_t state);
 uint32_t Comm_TakeExplicitWake(void);
 uint32_t Comm_TakeStopRequested(void);
 
+/* 【追加ゲートウェイ・状態遷移再構築】 IDLE中に低頻度で送る「生存確認+状態
+ * 通知」ビーコン(FRAME_CMD_IDLE_BEACON)。IDLE中はセンサーデータを取得も送信
+ * もしないので(app_state.c)、代わりにこれを呼んでPC側に「生きているが待機中」
+ * と伝える。state は AppState_t の値(現状は常に0=IDLE)。 */
+void Comm_SendIdleBeacon(uint32_t state);
+
 #ifdef __cplusplus
 }
 #endif

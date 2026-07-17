@@ -130,6 +130,26 @@ void Sensors_Resume(void)
   s_nextTofTick = HAL_GetTick();
 }
 
+/* 照度だけの取得(自身の周期 s_nextLightTick で更新)。Sensors_Refresh() と
+ * Sensors_RefreshLightOnly() の両方から呼ばれる共通実体。 */
+static void refreshLight(FullStatus_t *st, uint32_t now)
+{
+  if ((int32_t)(now - s_nextLightTick) >= 0)
+  {
+    s_nextLightTick = now + SENSORS_LIGHT_PERIOD_MS;
+    uint32_t light[LIGHT_SENSOR_MAX_CHANNELS] = {0};
+    if (BSP_LIGHT_SENSOR_GetValues(0, light) == BSP_ERROR_NONE)
+    {
+      st->light_raw = light[0];
+    }
+  }
+}
+
+void Sensors_RefreshLightOnly(FullStatus_t *st)
+{
+  refreshLight(st, HAL_GetTick());
+}
+
 void Sensors_Refresh(FullStatus_t *st)
 {
   uint32_t now = HAL_GetTick();
@@ -157,15 +177,7 @@ void Sensors_Refresh(FullStatus_t *st)
     }
   }
 
-  if ((int32_t)(now - s_nextLightTick) >= 0)
-  {
-    s_nextLightTick = now + SENSORS_LIGHT_PERIOD_MS;
-    uint32_t light[LIGHT_SENSOR_MAX_CHANNELS] = {0};
-    if (BSP_LIGHT_SENSOR_GetValues(0, light) == BSP_ERROR_NONE)
-    {
-      st->light_raw = light[0];
-    }
-  }
+  refreshLight(st, now);
 
   if (!s_tofOk)
   {

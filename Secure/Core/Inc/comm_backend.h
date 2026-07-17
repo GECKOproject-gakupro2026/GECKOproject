@@ -82,6 +82,11 @@ void CommBridge_SetDeviceState(uint32_t state);
 uint32_t CommBridge_TakeExplicitWake(void);
 uint32_t CommBridge_TakeStopRequested(void);
 
+/* 【追加・状態遷移再構築】IDLE中の生存確認+状態通知ビーコンを送る
+ * (FRAME_CMD_IDLE_BEACON、センサー値は載せない)。実装は
+ * telemetry::Service::sendIdleBeacon() へ委譲。 */
+void CommBridge_SendIdleBeacon(uint32_t state);
+
 #ifdef __cplusplus
 }
 #endif

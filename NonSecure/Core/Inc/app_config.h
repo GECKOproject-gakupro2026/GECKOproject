@@ -21,9 +21,12 @@
 #define CFG_ACTIVE_HB_MS          250U
 #define CFG_ACTIVE_TELEMETRY_MS    20U   /* 50 Hz */
 
-/* IDLE telemetry cadence. IDLE no longer silences the comm stack (see
- * app_loop.c) - only the slower rate distinguishes it from ACTIVE. */
-#define CFG_IDLE_TELEMETRY_MS     200U   /* 5 Hz */
+/* IDLE beacon cadence. IDLE no longer acquires or sends sensor data at all
+ * (state-machine rebuild) - it only pings this low-rate "alive, but idle"
+ * beacon (FRAME_CMD_IDLE_BEACON, no sensor payload) so the PC can tell the
+ * board apart from a dead link. Light/audio are still sampled for trigger
+ * evaluation (see app_state.c's IDLE block), just not sent. */
+#define CFG_IDLE_BEACON_MS        1000U   /* 1 Hz */
 
 /* COMM cadence for the ACTIVE COMM->ACQUIRE->WAIT cycle (app_state.c). The
  * WAIT is computed from the *previous* COMM return time so frames arrive at

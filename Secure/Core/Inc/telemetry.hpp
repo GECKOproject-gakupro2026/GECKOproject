@@ -141,6 +141,11 @@ public:
    * the rest of *dst. */
   void copyMcuStatusInto(FullStatus &dst) const;
 
+  /* IDLE中に低頻度で送る「生存確認+状態通知」ビーコン。センサー値は載せない
+   * (FRAME_CMD_IDLE_BEACON, payload = uptime_ms u32 LE + device_state u8)。
+   * NonSecure の Comm_SendIdleBeacon() NSCゲートウェイから呼ばれる。 */
+  void sendIdleBeacon(uint32_t state);
+
 private:
   void handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
                    uint16_t len, bool fromTcp);

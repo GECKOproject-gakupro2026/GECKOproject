@@ -289,6 +289,26 @@ void Service::sendTcp(const FullStatus &st)
   }
 }
 
+void Service::sendIdleBeacon(uint32_t state)
+{
+  uint8_t payload[5];
+  uint32_t uptime = HAL_GetTick();
+  payload[0] = static_cast<uint8_t>(uptime & 0xFFU);
+  payload[1] = static_cast<uint8_t>((uptime >> 8) & 0xFFU);
+  payload[2] = static_cast<uint8_t>((uptime >> 16) & 0xFFU);
+  payload[3] = static_cast<uint8_t>((uptime >> 24) & 0xFFU);
+  payload[4] = static_cast<uint8_t>(state & 0xFFU);
+
+  uint8_t frame[sizeof(payload) + FRAME_OVERHEAD];
+  size_t len = Frame_Encode(FRAME_CMD_IDLE_BEACON, uartSeq_++, payload, sizeof(payload),
+                            frame, sizeof(frame));
+  if (len > 0U)
+  {
+    (void)comm_uart::SendAsync(frame, len, 0);
+    comm_wifi::SendRaw(frame, static_cast<int32_t>(len));
+  }
+}
+
 void Service::pollTcp()
 {
   uint8_t buf[64];
@@ -1109,6 +1129,14 @@ extern "C" uint32_t CommBridge_TakeStopRequested(void)
   bool req = stopCommRequested;
   stopCommRequested = false;
   return req ? 1U : 0U;
+}
+
+extern "C" void CommBridge_SendIdleBeacon(uint32_t state)
+{
+  if (telemetry::g_service != nullptr)
+  {
+    telemetry::g_service->sendIdleBeacon(state);
+  }
 }
 
 extern "C" uint32_t CommBridge_GetLinkStatus(void)

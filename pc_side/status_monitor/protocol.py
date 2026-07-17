@@ -33,6 +33,7 @@ CMD_STOP_COMM = 0x10    # PC->board: explicit ACTIVE->IDLE hint
 CMD_LOG_REQ = 0x11      # PC->board: u32 startIndex LE (paged non-volatile log read)
 CMD_LOG_RESP = 0x12     # board->PC: u32 startIndex + u16 count + count x LOG_RECORD_FMT
 CMD_LOG_RESET = 0x13    # PC->board: erase the non-volatile state log
+CMD_IDLE_BEACON = 0x14  # board->PC: "<IB" uptime_ms/device_state, no sensor data
 CMD_ACK = 0x7E          # "<BBI" orig_cmd/orig_seq/arg
 CMD_NACK = 0x7F         # "<BBB" orig_cmd/orig_seq/error
 
@@ -77,6 +78,13 @@ def decode_audio(payload: bytes) -> list[int]:
     """CMD_AUDIO payload -> list of int16 PCM samples."""
     count = len(payload) // 2
     return list(struct.unpack(f"<{count}h", payload[: count * 2]))
+
+
+def decode_idle_beacon(payload: bytes) -> tuple[int, int]:
+    """CMD_IDLE_BEACON payload -> (uptime_ms, device_state). No sensor data:
+    IDLE no longer acquires or sends it (state-machine rebuild)."""
+    uptime_ms, device_state = struct.unpack("<IB", payload[:5])
+    return uptime_ms, device_state
 
 
 def build_frame(cmd: int, seq: int, payload: bytes = b"") -> bytes:

@@ -30,6 +30,12 @@ void SensorStore_AcquireAll(void)
   s_status.button = Board_ButtonRead();
 }
 
+void SensorStore_AcquireTriggerInputs(void)
+{
+  Sensors_RefreshLightOnly(&s_status);
+  Audio_Refresh(&s_status);
+}
+
 const FullStatus_t *SensorStore_GetForSend(void)
 {
   return &s_status;

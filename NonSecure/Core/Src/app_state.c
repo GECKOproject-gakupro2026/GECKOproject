@@ -3,10 +3,10 @@
   * @file    app_state.c
   * @brief   app_state.h の実装。app_loop.c から抽出したデバイス状態機械。
   *
-  *          この Step(リファクタ抽出)では挙動は従来の App_Run と同一
-  *          (テレメトリ周期・LED・ToF・IDLE判定を据え置き)。ACQUIRE/COMM の
-  *          明示的サブ状態と default→IDLE フォールバックを導入し、以降の
-  *          Step(周期最適化・ログ連携)の土台とする。
+  *          IDLEはトリガー待機状態: センサーの取得も送信も行わない
+  *          (例外: 照度・音圧はトリガー判定用に取得)。低頻度のIDLE_BEACON
+  *          だけを送りPCに生存を伝える。ACTIVEはACQUIRE/COMMのサブサイクルで
+  *          センサー取得とテレメトリ送信を分離し、一定周期でPCへ届ける。
   ******************************************************************************
   */
 #include "app_state.h"
@@ -28,7 +28,7 @@ void AppState_Init(AppStateCtx_t *ctx, uint32_t now_ms)
 {
   ctx->state = STATE_ACTIVE_COMM; /* 起動直後はACTIVE(即IDLEにしない) */
   ctx->lastActivityMs = now_ms;
-  ctx->nextTelemetryMs = now_ms;
+  ctx->nextBeaconMs = now_ms;
   ctx->nextLedMs = now_ms;
   ctx->commReturnMs = now_ms;
   ctx->nextCommMs = now_ms;
@@ -83,7 +83,6 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
         ctx->state = STATE_ACTIVE_COMM;
         Sensors_Resume();
         Board_LedRedOff();
-        ctx->nextTelemetryMs = now_ms;
         ctx->nextLedMs = now_ms;
         ctx->nextCommMs = now_ms;
         ctx->haveAcquired = 0U;
@@ -105,13 +104,14 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
       int stopRequested = (Comm_TakeStopRequested() != 0U);
       if (timedOutIdle || stopRequested)
       {
-        /* IDLEへ: 電力を食う ToF だけ SLEEP。通信は低頻度で継続。 */
+        /* IDLEへ: 電力を食う ToF だけ SLEEP。センサー取得/送信は停止し、
+         * 低頻度のIDLE_BEACONだけに切り替わる。 */
         ctx->state = STATE_IDLE;
         Sensors_Stop();
         Board_LedGreenOff();
         Board_LedRedOff();
         ctx->nextLedMs = now_ms;
-        ctx->nextTelemetryMs = now_ms;
+        ctx->nextBeaconMs = now_ms;
       }
       else if ((int32_t)(now_ms - ctx->nextLedMs) >= 0)
       {
@@ -129,7 +129,7 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
       Board_LedGreenOff();
       Board_LedRedOff();
       ctx->nextLedMs = now_ms;
-      ctx->nextTelemetryMs = now_ms;
+      ctx->nextBeaconMs = now_ms;
       break;
   }
 
@@ -144,15 +144,19 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 
   if (ctx->state == STATE_IDLE)
   {
-    /* IDLE: 低頻度で送るだけ(取得と送信を分けるほどの精度は不要)。
-     * このStepでは挙動不変 - sensor_store経由になっただけで、まだ全センサー
-     * (SensorStore_AcquireAll)を取得・送信している。IDLE専用の扱いはStep2。 */
-    if ((int32_t)(now_ms - ctx->nextTelemetryMs) >= 0)
+    /* IDLE: 要求「uartのdma/フラグ/BLE・WiFiコマンドを待機する以外の動作は
+     * しない」を実装する中核部分。センサーの取得も送信も行わない。
+     * 例外として照度・音圧だけは取得する - Trigger_Poll() の TRIG_LIGHT/
+     * TRIG_AUDIO(=ファームウェア自身がフラグを立てて状態遷移する経路、
+     * memo.md「書き込まれたファームによってトリガーを動作させることも可能」)
+     * がIDLE中も生きるように。取得はするが送信はしない(トリガー判定専用)。 */
+    SensorStore_AcquireTriggerInputs();
+
+    /* データではなく「IDLEで生存中」だけを低頻度で知らせる。 */
+    if ((int32_t)(now_ms - ctx->nextBeaconMs) >= 0)
     {
-      ctx->nextTelemetryMs = now_ms + CFG_IDLE_TELEMETRY_MS;
-      SensorStore_AcquireAll();
-      (void)Comm_SendTelemetry(SensorStore_GetForSend());
-      ctx->commReturnMs = HAL_GetTick();
+      ctx->nextBeaconMs = now_ms + CFG_IDLE_BEACON_MS;
+      Comm_SendIdleBeacon((uint32_t)ctx->state);
     }
     /* IDLE中は次回ACTIVE突入時に取得し直す。 */
     ctx->haveAcquired = 0U;
