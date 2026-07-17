@@ -87,6 +87,13 @@ uint32_t CommBridge_TakeStopRequested(void);
  * telemetry::Service::sendIdleBeacon() へ委譲。 */
 void CommBridge_SendIdleBeacon(uint32_t state);
 
+/* 【追加・状態遷移再構築 Step 3】FRAME_CMD_SET_SENSOR_RATE 受信で立つ一回消費
+ * ペンディング値。呼ぶ度にクリアされる(CommBridge_TakeExplicitWakeと同じ
+ * consume-once の作法)。戻り値: 1=取得した/0=なし。
+ * sensorId・periodMsはポインタなので、呼び出し元(secure_nsc.c)で
+ * cmse_check_address_range検証済みのローカル変数を渡すこと。 */
+uint32_t CommBridge_TakeSensorRateCmd(uint8_t *sensorId, uint16_t *periodMs);
+
 #ifdef __cplusplus
 }
 #endif

@@ -182,6 +182,23 @@ class StatusMonitorApp:
         self._build_alldata_tab()
         self._build_audio_tab()
 
+        # --- センサー取得周期(Step 3: FRAME_CMD_SET_SENSOR_RATE) ---
+        f_rate = ttk.LabelFrame(self.root, text="センサー取得周期 [ms]", padding=4)
+        f_rate.pack(fill="x", padx=6, pady=2)
+        self.sensor_rate_vars: dict[int, tk.StringVar] = {}
+        for sensor_id, name, default_ms in (
+            (0, "env(温湿度気圧)", 100),
+            (1, "light(照度)", 100),
+            (2, "tof(距離)", 100),
+            (3, "motion(加速度等,0=毎回)", 0),
+        ):
+            ttk.Label(f_rate, text=name).pack(side="left", padx=(6, 2))
+            var = tk.StringVar(value=str(default_ms))
+            self.sensor_rate_vars[sensor_id] = var
+            ttk.Entry(f_rate, textvariable=var, width=7).pack(side="left", padx=(0, 6))
+        ttk.Button(f_rate, text="適用", command=self._apply_sensor_rates).pack(
+            side="left", padx=6)
+
         # --- ログ ---
         f_log = ttk.LabelFrame(self.root, text="ファームウェアログ", padding=4)
         f_log.pack(fill="x", padx=6, pady=4)
@@ -497,6 +514,28 @@ class StatusMonitorApp:
             self._log("待機コマンド(LINK_STANDBY)を送信")
         else:
             self._log("待機: この接続方式では送信できません")
+
+    def _apply_sensor_rates(self) -> None:
+        """センサー周期設定UIの値をそれぞれ FRAME_CMD_SET_SENSOR_RATE で送る
+        (sensor_id 0=env,1=light,2=tof,3=motion)。ボード側で下限クランプされる
+        (実装計画_統合.md §3)。"""
+        if self.transport is None:
+            self._log("センサー周期: 未接続")
+            return
+        for sensor_id, var in self.sensor_rate_vars.items():
+            try:
+                period_ms = int(var.get())
+            except ValueError:
+                self._log(f"センサー周期: sensor_id={sensor_id} の値が不正: {var.get()!r}")
+                continue
+            frame = protocol.build_frame(
+                protocol.CMD_SET_SENSOR_RATE, 0,
+                struct.pack("<BH", sensor_id, max(0, period_ms)))
+            if self.transport.write(frame):
+                self._log(f"センサー周期送信: id={sensor_id} period={period_ms}ms")
+            else:
+                self._log("センサー周期: この接続方式では送信できません")
+                break
 
     def _send_enter_comm(self) -> None:
         """厳密FSM(Step C2)向け: ボードのIDLE->ACTIVE遷移を許可する唯一の根拠。

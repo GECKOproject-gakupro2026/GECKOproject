@@ -67,6 +67,15 @@ static int wake_requested(const AppStateCtx_t *ctx, uint32_t now_ms, uint32_t li
 
 void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 {
+  /* PC側からのセンサー周期変更コマンド(FRAME_CMD_SET_SENSOR_RATE)を消費する。
+   * 一回消費フラグなので、呼ぶのはここだけ。 */
+  uint8_t rateSensorId;
+  uint16_t ratePeriodMs;
+  if (Comm_TakeSensorRateCmd(&rateSensorId, &ratePeriodMs) != 0U)
+  {
+    Sensors_SetPeriod(rateSensorId, ratePeriodMs);
+  }
+
   /* トリガー(ホスト通信/照度/音圧)を毎周ポーリング。発火で活動時刻を更新。 */
   if (Trigger_Poll(SensorStore_Peek()) != TRIG_NONE)
   {

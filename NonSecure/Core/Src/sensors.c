@@ -20,13 +20,26 @@
 #include <stdio.h>
 
 static uint8_t s_tofOk = 0U;
-static uint32_t s_nextEnvTick, s_nextLightTick, s_nextTofTick;
+static uint32_t s_nextEnvTick, s_nextLightTick, s_nextTofTick, s_nextMotionTick;
 
-/* env/light periods match the old Secure telemetry cadence; ToF stays at
- * its slower rate since the sensor's own timing budget limits it anyway. */
-#define SENSORS_ENV_PERIOD_MS    100U
-#define SENSORS_LIGHT_PERIOD_MS  200U
-#define SENSORS_TOF_PERIOD_MS    500U
+/* 実行時にコマンド(FRAME_CMD_SET_SENSOR_RATE)で変更できる取得周期。
+ * 既定値はすべて10Hz以上(要求「全センサー取得周期の最低値を10Hz」)。
+ * motionは0=「周期なし、毎回読む」(ODR 208/208/100Hzで送信レート依存、
+ * 既に10Hz超のため専用の間引きは不要)。 */
+static uint16_t s_envPeriodMs    = 100U; /* 10Hz。HTS221のODR上限12.5Hzが
+                                             実質の物理下限(1/7/12.5Hzの3段階
+                                             しかない)ので、これが最善 */
+static uint16_t s_lightPeriodMs  = 100U; /* 10Hz。要 IT100(積分時間) */
+static uint16_t s_tofPeriodMs    = 100U; /* 10Hz。要 profile.Frequency=10(Step4) */
+static uint16_t s_motionPeriodMs = 0U;   /* 0=毎回(周期なし) */
+
+/* Sensors_SetPeriod() の下限クランプ値。ハード制約を割るとI2Cがメインループを
+ * 圧迫し、Phase Aで解消した停止クラスの問題を再発させかねない
+ * (実装計画_統合.md §3)。 */
+#define SENSORS_ENV_PERIOD_MIN_MS    80U   /* HTS221 ODR 12.5Hz = 80ms */
+#define SENSORS_LIGHT_PERIOD_MIN_MS  50U   /* VEML3235 IT50 = 50ms */
+#define SENSORS_TOF_PERIOD_MIN_MS    50U   /* I2C 約35ms/read */
+#define SENSORS_PERIOD_MAX_MS        60000U
 
 /* Common VL53L5CX bring-up: BSP init + profile config + start ranging.
  * Used both at boot and after Sensors_Resume() re-powers the sensor via LPn. */
@@ -81,16 +94,83 @@ void Sensors_Init(void)
   (void)BSP_MOTION_SENSOR_SetOutputDataRate(0, MOTION_GYRO, 208.0f);
   (void)BSP_MOTION_SENSOR_SetOutputDataRate(1, MOTION_MAGNETO, 100.0f);
 
-  if (BSP_LIGHT_SENSOR_Init(0) != BSP_ERROR_NONE ||
-      BSP_LIGHT_SENSOR_Start(0, LIGHT_SENSOR_MODE_CONTINUOUS) != BSP_ERROR_NONE)
+  if (BSP_LIGHT_SENSOR_Init(0) != BSP_ERROR_NONE)
   {
     printf("[SENS] light sensor init failed\r\n");
+  }
+  /* VEML3235_Init() 自身が内部で VEML3235_Pwr_On() を呼びSHUTDOWNビットを
+   * クリアするため、Init() が返った時点で既に「キャプチャ中」になっている
+   * (Startを呼ぶ前でもドライバのIsStarted/IsContinuousフラグはInit内で
+   * 立つ)。SetExposureTime()はキャプチャ中に呼んではいけない制約があるので、
+   * 一度明示的にStopしてSHUTDOWNビットを立ててから設定変更し、Startで
+   * 測定を再開する。逆順(Init直後にSetExposureTime)だと反映されない
+   * (実機で確認済み: light_rawが既定の200ms周期のまま変わらなかった)。
+   * 【重要】この引数はミリ秒ではなく VEML3235 の ALS_CONF レジスタの生の
+   * ビット値そのもの(veml3235_reg.h の VEML3235_CONF_IT* 一式、ドライバが
+   * config |= (uint16_t)ExposureTime とマスクなしで書き込むため)。
+   * VEML3235_CONF_IT100 = (0x00UL << 6) = 0 なので下の "0U" がIT100を意味する
+   * (単純に「100」を渡すとレジスタを壊す事故になるので要注意)。
+   * 【実機で確認した既知の制約】IT100は正しく反映される(レジスタ読み戻しで
+   * 確認済み)が、それでも実測の値更新は約200ms(5Hz)止まりで、s_lightPeriodMs
+   * を100msにしても10Hzには届かない。VEML3235自体の内部測定サイクルが
+   * IT設定と別に律速していると見られ、これ以上はデータシート精査が要る
+   * ハード側の制約として実装計画_統合.md §3に記録済み。
+   * 暗所での感度は落ちるトレードオフもある(実機で妥当性を確認すること)。 */
+  (void)BSP_LIGHT_SENSOR_Stop(0);
+  (void)BSP_LIGHT_SENSOR_SetExposureTime(0, 0U); /* VEML3235_CONF_IT100 */
+  if (BSP_LIGHT_SENSOR_Start(0, LIGHT_SENSOR_MODE_CONTINUOUS) != BSP_ERROR_NONE)
+  {
+    printf("[SENS] light sensor start failed\r\n");
   }
 
   uint32_t now = HAL_GetTick();
   s_nextEnvTick = now;
   s_nextLightTick = now;
   s_nextTofTick = now;
+  s_nextMotionTick = now;
+}
+
+/* コマンド(FRAME_CMD_SET_SENSOR_RATE)からの実行時周期変更。ハード制約を下限に
+ * クランプする(§3参照)。sensor_id: 0=env, 1=light, 2=tof, 3=motion。 */
+void Sensors_SetPeriod(uint8_t sensor_id, uint16_t period_ms)
+{
+  uint16_t clamped = period_ms;
+  const char *name = "?";
+  uint16_t minMs = 0U;
+
+  switch (sensor_id)
+  {
+    case 0U: name = "env";    minMs = SENSORS_ENV_PERIOD_MIN_MS;   break;
+    case 1U: name = "light";  minMs = SENSORS_LIGHT_PERIOD_MIN_MS; break;
+    case 2U: name = "tof";    minMs = SENSORS_TOF_PERIOD_MIN_MS;   break;
+    case 3U: name = "motion"; minMs = 0U;                          break;
+    default:
+      printf("[SENS] SetPeriod: unknown sensor_id=%u\r\n", sensor_id);
+      return;
+  }
+
+  if (clamped > 0U && clamped < minMs)
+  {
+    clamped = minMs;
+  }
+  if (clamped > SENSORS_PERIOD_MAX_MS)
+  {
+    clamped = SENSORS_PERIOD_MAX_MS;
+  }
+  if (clamped != period_ms)
+  {
+    printf("[SENS] period clamped: %s requested=%u used=%u\r\n",
+           name, period_ms, clamped);
+  }
+
+  switch (sensor_id)
+  {
+    case 0U: s_envPeriodMs = clamped;    break;
+    case 1U: s_lightPeriodMs = clamped;  break;
+    case 2U: s_tofPeriodMs = clamped;    break;
+    case 3U: s_motionPeriodMs = clamped; break;
+    default: break;
+  }
 }
 
 /* Low-power mode: park the VL53L5CX in its own SLEEP power mode rather than
@@ -136,7 +216,7 @@ static void refreshLight(FullStatus_t *st, uint32_t now)
 {
   if ((int32_t)(now - s_nextLightTick) >= 0)
   {
-    s_nextLightTick = now + SENSORS_LIGHT_PERIOD_MS;
+    s_nextLightTick = now + s_lightPeriodMs;
     uint32_t light[LIGHT_SENSOR_MAX_CHANNELS] = {0};
     if (BSP_LIGHT_SENSOR_GetValues(0, light) == BSP_ERROR_NONE)
     {
@@ -161,7 +241,7 @@ void Sensors_Refresh(FullStatus_t *st)
 
   if ((int32_t)(now - s_nextEnvTick) >= 0)
   {
-    s_nextEnvTick = now + SENSORS_ENV_PERIOD_MS;
+    s_nextEnvTick = now + s_envPeriodMs;
     float f = 0.0f;
     if (BSP_ENV_SENSOR_GetValue(0, ENV_TEMPERATURE, &f) == BSP_ERROR_NONE)
     {
@@ -189,7 +269,7 @@ void Sensors_Refresh(FullStatus_t *st)
   }
   else if ((int32_t)(now - s_nextTofTick) >= 0)
   {
-    s_nextTofTick = now + SENSORS_TOF_PERIOD_MS;
+    s_nextTofTick = now + s_tofPeriodMs;
     static RANGING_SENSOR_Result_t result;
     if (BSP_RANGING_SENSOR_GetDistance(0, &result) == BSP_ERROR_NONE)
     {
@@ -202,23 +282,33 @@ void Sensors_Refresh(FullStatus_t *st)
     }
   }
 
-  BSP_MOTION_SENSOR_Axes_t axes = {0};
-  if (BSP_MOTION_SENSOR_GetAxes(0, MOTION_ACCELERO, &axes) == BSP_ERROR_NONE)
+  /* motion: 既定は s_motionPeriodMs=0(周期なし=毎回読む)。ODR 208/208/100Hzで
+   * 送信レート(最大50Hz)に対し既に余裕があるため、通常はここが常に真になる。
+   * コマンドで明示的に間引く(period_ms>0)ことも可能にしておく。 */
+  if (s_motionPeriodMs == 0U || (int32_t)(now - s_nextMotionTick) >= 0)
   {
-    st->acc_mg[0] = (int16_t)axes.xval;
-    st->acc_mg[1] = (int16_t)axes.yval;
-    st->acc_mg[2] = (int16_t)axes.zval;
-  }
-  if (BSP_MOTION_SENSOR_GetAxes(0, MOTION_GYRO, &axes) == BSP_ERROR_NONE)
-  {
-    st->gyro_dps10[0] = (int16_t)(axes.xval / 100); /* mdps -> dps*10 */
-    st->gyro_dps10[1] = (int16_t)(axes.yval / 100);
-    st->gyro_dps10[2] = (int16_t)(axes.zval / 100);
-  }
-  if (BSP_MOTION_SENSOR_GetAxes(1, MOTION_MAGNETO, &axes) == BSP_ERROR_NONE)
-  {
-    st->mag_mgauss[0] = (int16_t)axes.xval;
-    st->mag_mgauss[1] = (int16_t)axes.yval;
-    st->mag_mgauss[2] = (int16_t)axes.zval;
+    if (s_motionPeriodMs != 0U)
+    {
+      s_nextMotionTick = now + s_motionPeriodMs;
+    }
+    BSP_MOTION_SENSOR_Axes_t axes = {0};
+    if (BSP_MOTION_SENSOR_GetAxes(0, MOTION_ACCELERO, &axes) == BSP_ERROR_NONE)
+    {
+      st->acc_mg[0] = (int16_t)axes.xval;
+      st->acc_mg[1] = (int16_t)axes.yval;
+      st->acc_mg[2] = (int16_t)axes.zval;
+    }
+    if (BSP_MOTION_SENSOR_GetAxes(0, MOTION_GYRO, &axes) == BSP_ERROR_NONE)
+    {
+      st->gyro_dps10[0] = (int16_t)(axes.xval / 100); /* mdps -> dps*10 */
+      st->gyro_dps10[1] = (int16_t)(axes.yval / 100);
+      st->gyro_dps10[2] = (int16_t)(axes.zval / 100);
+    }
+    if (BSP_MOTION_SENSOR_GetAxes(1, MOTION_MAGNETO, &axes) == BSP_ERROR_NONE)
+    {
+      st->mag_mgauss[0] = (int16_t)axes.xval;
+      st->mag_mgauss[1] = (int16_t)axes.yval;
+      st->mag_mgauss[2] = (int16_t)axes.zval;
+    }
   }
 }

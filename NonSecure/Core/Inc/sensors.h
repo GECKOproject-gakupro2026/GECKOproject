@@ -20,6 +20,11 @@ void Sensors_Refresh(FullStatus_t *st);
  * Trigger_Poll() の TRIG_LIGHT 判定に使う。 */
 void Sensors_RefreshLightOnly(FullStatus_t *st);
 
+/* 実行時にセンサーの取得周期を変更する(FRAME_CMD_SET_SENSOR_RATE経由)。
+ * sensor_id: 0=env, 1=light, 2=tof, 3=motion(0=毎回)。
+ * ハード制約の下限を割る値は自動的にクランプされる。 */
+void Sensors_SetPeriod(uint8_t sensor_id, uint16_t period_ms);
+
 /* Low-power mode support (Phase E): stop/resume the ToF ranging cycle. */
 void Sensors_Stop(void);
 void Sensors_Resume(void);

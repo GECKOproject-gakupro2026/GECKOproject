@@ -98,6 +98,13 @@ uint32_t deviceState = 2U;
  * Comm_TakeExplicitWake()/Comm_TakeStopRequested(). */
 volatile bool explicitWakeRequested = false;
 volatile bool stopCommRequested = false;
+
+/* FRAME_CMD_SET_SENSOR_RATE: 一回消費のペンディング値(state-machine rebuild
+ * Step 3)。既存の explicitWakeRequested と同じ file-scope volatile パターン。
+ * Comm_TakeSensorRateCmd() が読み出してから valid をクリアする。 */
+volatile bool pendingSensorRateValid = false;
+volatile uint8_t pendingSensorRateId = 0U;
+volatile uint16_t pendingSensorRatePeriodMs = 0U;
 uint8_t nsCmdRing[16];
 uint8_t nsCmdHead = 0;
 uint8_t nsCmdTail = 0;
@@ -502,6 +509,28 @@ void Service::handleFrame(uint8_t cmd, uint8_t seq, const uint8_t *payload,
       /* Explicit ACTIVE->IDLE hint, consumed by app_state.c the same way. */
       stopCommRequested = true;
       state_log::Push(state_log::Event::StopComm, fromTcp ? 1U : 0U);
+      AckPayload ack = {cmd, seq, 0U};
+      sendResponse(fromTcp, FRAME_CMD_ACK,
+                   reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
+      break;
+    }
+    case FRAME_CMD_SET_SENSOR_RATE:
+    {
+      /* payload = [sensor_id u8][period_ms u16 LE]. Sensors live in
+       * NonSecure, so this just latches the request as a one-shot pending
+       * value; Comm_TakeSensorRateCmd() (polled from AppState_Tick) consumes
+       * it and calls Sensors_SetPeriod() on the NonSecure side. */
+      if (len < 3U)
+      {
+        NackPayload nack = {cmd, seq, FRAME_ERR_BAD_STATE};
+        sendResponse(fromTcp, FRAME_CMD_NACK,
+                     reinterpret_cast<const uint8_t *>(&nack), sizeof(nack));
+        break;
+      }
+      pendingSensorRateId = payload[0];
+      pendingSensorRatePeriodMs = static_cast<uint16_t>(
+          static_cast<uint16_t>(payload[1]) | (static_cast<uint16_t>(payload[2]) << 8));
+      pendingSensorRateValid = true;
       AckPayload ack = {cmd, seq, 0U};
       sendResponse(fromTcp, FRAME_CMD_ACK,
                    reinterpret_cast<const uint8_t *>(&ack), sizeof(ack));
@@ -1137,6 +1166,19 @@ extern "C" void CommBridge_SendIdleBeacon(uint32_t state)
   {
     telemetry::g_service->sendIdleBeacon(state);
   }
+}
+
+extern "C" uint32_t CommBridge_TakeSensorRateCmd(uint8_t *sensorId, uint16_t *periodMs)
+{
+  using namespace telemetry;
+  if (!pendingSensorRateValid)
+  {
+    return 0U;
+  }
+  *sensorId = pendingSensorRateId;
+  *periodMs = pendingSensorRatePeriodMs;
+  pendingSensorRateValid = false;
+  return 1U;
 }
 
 extern "C" uint32_t CommBridge_GetLinkStatus(void)

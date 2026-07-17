@@ -184,6 +184,32 @@ CMSE_NS_ENTRY void Comm_SendIdleBeacon(uint32_t state)
 }
 
 /**
+  * @brief  Additive gateway (state-machine rebuild Step 3): FRAME_CMD_SET_
+  *         SENSOR_RATE の一回消費フラグを取り出す。出力ポインタはNonSecure
+  *         由来なので、Comm_GetMcuInfo と同じ作法で検証してからSecure
+  *         ローカル変数を経由して書き戻す。
+  */
+CMSE_NS_ENTRY uint32_t Comm_TakeSensorRateCmd(uint8_t *sensorId, uint16_t *periodMs)
+{
+  if (cmse_check_address_range(sensorId, sizeof(*sensorId),
+                               CMSE_NONSECURE | CMSE_MPU_READWRITE) == NULL ||
+      cmse_check_address_range(periodMs, sizeof(*periodMs),
+                               CMSE_NONSECURE | CMSE_MPU_READWRITE) == NULL)
+  {
+    return 0U;
+  }
+  uint8_t localId = 0U;
+  uint16_t localPeriod = 0U;
+  uint32_t got = CommBridge_TakeSensorRateCmd(&localId, &localPeriod);
+  if (got != 0U)
+  {
+    *sensorId = localId;
+    *periodMs = localPeriod;
+  }
+  return got;
+}
+
+/**
   * @brief  Link status bits: 0=BLE alive, 1=WiFi up, 2=BLE conn, 3=TCP client.
   */
 CMSE_NS_ENTRY uint32_t Comm_GetLinkStatus(void)

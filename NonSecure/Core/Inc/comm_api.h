@@ -84,6 +84,13 @@ uint32_t Comm_TakeStopRequested(void);
  * と伝える。state は AppState_t の値(現状は常に0=IDLE)。 */
 void Comm_SendIdleBeacon(uint32_t state);
 
+/* 【追加ゲートウェイ・状態遷移再構築 Step 3】PC側から受け取った
+ * FRAME_CMD_SET_SENSOR_RATE を一回消費フラグとして取り出す。
+ * 戻り値: 1=取得した(sensorId・periodMsに値が入る)、0=無し。
+ * app_state.c が AppState_Tick の冒頭でこれを呼び、取得できたら
+ * Sensors_SetPeriod() に渡す。 */
+uint32_t Comm_TakeSensorRateCmd(uint8_t *sensorId, uint16_t *periodMs);
+
 #ifdef __cplusplus
 }
 #endif

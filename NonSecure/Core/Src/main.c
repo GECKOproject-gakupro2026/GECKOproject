@@ -41,7 +41,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   31U
+#define NS_APP_VERSION   32U
 
 /* Version banner placed at a fixed offset so the Secure loader (and a host
  * tool) can read the staged/running NonSecure version without executing it.

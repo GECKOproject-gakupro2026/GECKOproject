@@ -106,3 +106,13 @@ void Comm_SendIdleBeacon(uint32_t state)
 {
   CommBridge_SendIdleBeacon(state);
 }
+
+uint32_t Comm_TakeSensorRateCmd(uint8_t *sensorId, uint16_t *periodMs)
+{
+  if (sensorId == NULL || periodMs == NULL)
+  {
+    return 0U;
+  }
+  /* TrustZoneなし: 同一メモリ空間なので、検証もローカルコピーも不要。 */
+  return CommBridge_TakeSensorRateCmd(sensorId, periodMs);
+}
