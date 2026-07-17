@@ -59,5 +59,11 @@
                                           blocks ~11 ms (was ~130 ms at 9600),
                                           so 10 Hz leaves plenty of headroom
                                           (UART ceiling ~90 Hz).              */
+#define CFG_TLM_BLE_FRAG_PERIOD_MS 1000U /* FullStatus fragment over BLE: 1 Hz,
+                                          i.e. one full snapshot every 3
+                                          fragments (~3 s). Independent of
+                                          MiniStatus's 10 Hz - this is for the
+                                          "every sensor over BLE" tab, not the
+                                          live gauges.                        */
 
 #endif /* APP_CONFIG_H */

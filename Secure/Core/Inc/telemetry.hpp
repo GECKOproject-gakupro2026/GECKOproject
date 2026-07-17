@@ -167,6 +167,7 @@ private:
   uint32_t nextTofTick_ = 0;
   uint32_t nextMcuTick_ = 0;
   uint32_t nextBleTick_ = 0;
+  uint32_t nextBleFragTick_ = 0;
   uint32_t loopCount_ = 0;
   uint32_t loopWindowStart_ = 0;
   uint32_t loopMax_ = 0;

@@ -52,6 +52,12 @@ void StartRecTx();
  * 音声送信の間はBLEの notify リンクを占有できるようにする。 */
 bool IsRecTxActive();
 
+/* FullStatus(165B)全体をFRAME_CMD_STATUS_FRAGの生TLVで3フラグメントに
+ * 分割してnotify送信する。MiniStatus(SendStatus)は変更せず併用する。
+ * 呼ぶたびに1フラグメントだけ送るので、Service::poll()から低頻度
+ * (約1Hz)で呼ぶ想定。録音送信(IsRecTxActive())中は呼び出し元が止める。 */
+void SendStatusFrag(const telemetry::FullStatus &st);
+
 } // namespace comm_ble
 
 #endif /* COMM_BLE_HPP */

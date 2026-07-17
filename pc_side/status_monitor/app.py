@@ -108,6 +108,10 @@ class StatusMonitorApp:
         self.ble_rec_chunks: dict[int, bytes] = {}
         self.last_wav: pathlib.Path | None = None
 
+        # Step 7-3: full-sensor BLE fragment reassembly (CMD_STATUS_FRAG).
+        self.ble_frag_parts: dict[int, bytes] = {}
+        self.ble_frag_status: protocol.Status | None = None
+
         # Step D2: non-volatile state log (fetched page-by-page via LOG_REQ).
         self.log_records: list[tuple] = []
         self.log_fetch_next = 0
@@ -180,6 +184,7 @@ class StatusMonitorApp:
 
         self._build_dashboard_tab()
         self._build_alldata_tab()
+        self._build_ble_alldata_tab()
         self._build_audio_tab()
 
         # --- センサー取得周期(Step 3: FRAME_CMD_SET_SENSOR_RATE) ---
@@ -337,6 +342,27 @@ class StatusMonitorApp:
                            ("_crc", "CRCエラー数"),
                            ("_audio_frames", "音声フレーム数")]:
             self.tree.insert("", "end", iid=key, values=(label, "--"))
+
+    def _build_ble_alldata_tab(self) -> None:
+        # Step 7-3: FRAME_CMD_STATUS_FRAG reassembly view. MiniStatus (the
+        # dashboard/全データ tab over a BLE link) only ever carries a 39-byte
+        # compact subset; this tab shows the full 165-byte FullStatus that
+        # comm_ble.cpp's SendStatusFrag rebuilds from 3 notifies (~1 Hz), so
+        # values can be diffed field-by-field against a UART/TCP session.
+        body = ttk.Frame(self.notebook, padding=6)
+        self.notebook.add(body, text=" BLE全データ ")
+        ttk.Label(body, foreground="gray40",
+                 text="BLE接続中のみ更新 (FRAME_CMD_STATUS_FRAG, 約1Hzで全項目を再構成)"
+                 ).pack(anchor="w", pady=(0, 4))
+        cols = ("name", "value")
+        self.ble_tree = ttk.Treeview(body, columns=cols, show="headings", height=24)
+        self.ble_tree.heading("name", text="項目")
+        self.ble_tree.heading("value", text="値")
+        self.ble_tree.column("name", width=320, anchor="w")
+        self.ble_tree.column("value", width=380, anchor="w")
+        self.ble_tree.pack(fill="both", expand=True)
+        for key, label in self.ALL_FIELDS:
+            self.ble_tree.insert("", "end", iid=key, values=(label, "--"))
 
     def _build_audio_tab(self) -> None:
         body = ttk.Frame(self.notebook, padding=6)
@@ -692,6 +718,25 @@ class StatusMonitorApp:
     def _on_ble_rec_chunk(self, seq: int, payload: bytes) -> None:
         self.ble_rec_chunks[seq] = payload
 
+    def _handle_ble_status_frag(self, payload: bytes) -> None:
+        # Raw TLV, not frame_codec (see comm_ble.cpp's SendStatusFrag doc
+        # comment): [cmd u8][seq u16 LE][frag_idx u8][55-byte slice].
+        if len(payload) < 4 + protocol.FRAG_PAYLOAD:
+            return
+        seq, frag_idx = protocol.decode_status_frag_header(payload)
+        slice_bytes = payload[4:4 + protocol.FRAG_PAYLOAD]
+        if frag_idx == 0:
+            self.ble_frag_parts = {}
+        self.ble_frag_parts[frag_idx] = slice_bytes
+        if len(self.ble_frag_parts) < protocol.FRAG_COUNT:
+            return
+        full = b"".join(self.ble_frag_parts[i] for i in range(protocol.FRAG_COUNT))
+        self.ble_frag_parts = {}
+        status = protocol.decode_status(protocol.CMD_STATUS, full)
+        if status is not None:
+            self.ble_frag_status = status
+            self._apply_ble_alldata(status)
+
     def _handle_ble_rec_notify(self, payload: bytes) -> None:
         # Raw TLV, not frame_codec (see comm_ble.cpp's PumpRecTx doc comment):
         #   REC_CHUNK: [cmd u8][seq u16 LE][adpcm payload]
@@ -744,6 +789,10 @@ class StatusMonitorApp:
                 if (self.link_var.get() == "BLE" and payload
                         and payload[0] in (protocol.CMD_REC_CHUNK, protocol.CMD_REC_END)):
                     self._handle_ble_rec_notify(payload)
+                    continue
+                if (self.link_var.get() == "BLE" and payload
+                        and payload[0] == protocol.CMD_STATUS_FRAG):
+                    self._handle_ble_status_frag(payload)
                     continue
                 for item in self.parser.feed(payload):
                     if item[0] == "frame":
@@ -811,9 +860,16 @@ class StatusMonitorApp:
         self.root.after(1000, self._update_rate)
 
     # ---------------- rendering ----------------
-    def _tree_set(self, key: str, value: str) -> None:
-        if self.tree.exists(key):
-            self.tree.set(key, "value", value)
+    def _tree_set(self, key: str, value: str, tree: ttk.Treeview | None = None) -> None:
+        t = tree if tree is not None else self.tree
+        if t.exists(key):
+            t.set(key, "value", value)
+
+    def _apply_ble_alldata(self, st: protocol.Status) -> None:
+        for key, _label in self.ALL_FIELDS:
+            value = getattr(st, key)
+            text = f"{value:.2f}" if isinstance(value, float) else str(value)
+            self._tree_set(key, text, tree=self.ble_tree)
 
     DEVICE_STATE_LABELS = {0: "IDLE", 1: "ACTIVE(取得)", 2: "ACTIVE(通信)"}
 
