@@ -20,31 +20,30 @@ constexpr uint32_t kRegionBase = 0x600000U;      /* OTA staging/backupの外(11.
 constexpr uint32_t kSubsectorSize = 0x1000U;     /* 4 KB (BSP_OSPI_NOR_ERASE_4K)     */
 constexpr uint32_t kSubsectorCount = 16U;        /* 64 KB ぶん = 16 x 4KB            */
 constexpr uint32_t kRecordSize = 13U;            /* nvm_log::Record を packed で計算  */
-constexpr uint32_t kRecordsPerSubsector = kSubsectorSize / kRecordSize; /* 315 */
-constexpr uint32_t kCapacity = kSubsectorCount * kRecordsPerSubsector;  /* 5040 */
 
 static_assert(sizeof(Record) == kRecordSize, "nvm_log::Record must stay packed/13B");
 
-/* ヘッド(次に書く絶対レコード番号、0起点で増え続ける)は TAMP->BKP1R に持つ
- * (boot_guard.cppのBKP0Rと同じVBATドメイン作法。BKP0RはBootGuard使用中なので
- * 衝突しないBKP1Rを使う)。 */
-void ensureBackupDomainReady()
+/* サブセクタ先頭 8B は「このサブセクタは絶対レコード番号 seq から始まる」を
+ * 記録するヘッダ(magic+seq)。消去直後は 0xFFFFFFFF なので「未使用」と区別
+ * できる。VBATバックアップの無い基板でUSB完全電源断があると TAMP->BKP1R も
+ * 道連れで消えることが実機で確認された(2026-07-17)ため、ヘッドポインタは
+ * NOR自体から復元できるようにし、SRAMにキャッシュするだけにする。 */
+struct __attribute__((packed)) SubsectorHeader
 {
-  __HAL_RCC_RTCAPB_CLK_ENABLE();
-  HAL_PWR_EnableBkUpAccess();
-}
+  uint32_t magic;
+  uint32_t seq;
+};
+constexpr uint32_t kSubsectorHeaderSize = sizeof(SubsectorHeader); /* 8 */
+constexpr uint32_t kSubsectorHeaderMagic = 0x4E564C31U; /* "NVL1" */
+constexpr uint32_t kRecordsPerSubsector =
+    (kSubsectorSize - kSubsectorHeaderSize) / kRecordSize; /* 314 */
+constexpr uint32_t kCapacity = kSubsectorCount * kRecordsPerSubsector;  /* 5024 */
 
-uint32_t headIndex()
-{
-  ensureBackupDomainReady();
-  return TAMP->BKP1R;
-}
-
-void setHeadIndex(uint32_t v)
-{
-  ensureBackupDomainReady();
-  TAMP->BKP1R = v;
-}
+/* headIndex()のSRAMキャッシュ。起動後最初のアクセスで scanHeadIndexFromNor()
+ * により復元し、以後はここを読み書きする(電源が入っている間はTAMP->BKP1Rの
+ * 代わりに使うだけの通常変数)。 */
+bool headCached_ = false;
+uint32_t headCache_ = 0U;
 
 /* OSPI初期化は遅延・多重呼び出し安全(BSP側がIsInitializedを見て2回目はno-op)。
  * ota.cppのensureNorReady()と同じ設定値を使う。 */
@@ -70,6 +69,121 @@ bool ensureNorReady()
  * ヘッド絶対番号から逆算できるので専用の永続状態は要らない。 */
 uint32_t subsectorOf(uint32_t absIndex) { return (absIndex / kRecordsPerSubsector) % kSubsectorCount; }
 uint32_t offsetInSubsector(uint32_t absIndex) { return (absIndex % kRecordsPerSubsector) * kRecordSize; }
+
+/* レコードのNOR上アドレス(サブセクタ先頭のヘッダ8Bぶんだけ後ろにずれる)。 */
+uint32_t recordAddr(uint32_t absIndex)
+{
+  return kRegionBase + subsectorOf(absIndex) * kSubsectorSize + kSubsectorHeaderSize +
+         offsetInSubsector(absIndex);
+}
+
+uint32_t subsectorHeaderAddr(uint32_t subsector)
+{
+  return kRegionBase + subsector * kSubsectorSize;
+}
+
+/* このサブセクタの最初のレコード(offsetInSubsector==0)を書く直前に、
+ * 「絶対番号 seqAbsIndex から始まる」ことを示すヘッダを書き込む。 */
+bool writeSubsectorHeader(uint32_t subsector, uint32_t seqAbsIndex)
+{
+  SubsectorHeader hdr = {kSubsectorHeaderMagic, seqAbsIndex};
+  return BSP_OSPI_NOR_Write(0, reinterpret_cast<const uint8_t *>(&hdr),
+                             subsectorHeaderAddr(subsector), sizeof(hdr)) == BSP_ERROR_NONE;
+}
+
+/* 消去直後(0xFF埋め)かどうかをレコード全バイトで判定する。 */
+bool isBlankRecord(const Record &rec)
+{
+  const uint8_t *p = reinterpret_cast<const uint8_t *>(&rec);
+  for (uint32_t i = 0; i < sizeof(rec); ++i)
+  {
+    if (p[i] != 0xFFU)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* 起動後最初のアクセス時に一度だけ呼ばれる: 全サブセクタのヘッダをスキャンし、
+ * 最大seqを持つ(=最新の書き込み対象になった)サブセクタを見つけたら、その中を
+ * 先頭から走査して何件書かれているかを数え、headCache_ を復元する。
+ * どのサブセクタにも有効なヘッダが無ければログは空(headCache_=0)。 */
+void scanHeadIndexFromNor()
+{
+  uint32_t bestSubsector = 0;
+  uint32_t bestSeq = 0;
+  bool found = false;
+  for (uint32_t s = 0; s < kSubsectorCount; ++s)
+  {
+    SubsectorHeader hdr;
+    if (BSP_OSPI_NOR_Read(0, reinterpret_cast<uint8_t *>(&hdr), subsectorHeaderAddr(s),
+                           sizeof(hdr)) != BSP_ERROR_NONE)
+    {
+      continue;
+    }
+    if (hdr.magic != kSubsectorHeaderMagic)
+    {
+      continue; /* 未使用(消去済み)サブセクタ */
+    }
+    if (!found || hdr.seq >= bestSeq)
+    {
+      found = true;
+      bestSeq = hdr.seq;
+      bestSubsector = s;
+    }
+  }
+
+  if (!found)
+  {
+    headCache_ = 0U;
+    headCached_ = true;
+    return;
+  }
+
+  /* bestSubsector内を先頭から走査し、空白(0xFF)レコードに当たるまで数える。 */
+  uint32_t written = 0U;
+  while (written < kRecordsPerSubsector)
+  {
+    Record rec;
+    uint32_t addr = subsectorHeaderAddr(bestSubsector) + kSubsectorHeaderSize + written * kRecordSize;
+    if (BSP_OSPI_NOR_Read(0, reinterpret_cast<uint8_t *>(&rec), addr, sizeof(rec)) != BSP_ERROR_NONE)
+    {
+      break;
+    }
+    if (isBlankRecord(rec))
+    {
+      break;
+    }
+    written++;
+  }
+
+  headCache_ = bestSeq + written;
+  headCached_ = true;
+}
+
+/* headIndex()/setHeadIndex()を呼ぶ前に必ず通す。1回目だけNORスキャンする。
+ * 呼び出し元(Poll()/Get()/Count()/Size())はすべて先に ensureNorReady() を
+ * 済ませているので、ここでOSPIアクセスして安全。 */
+void ensureHeadCached()
+{
+  if (!headCached_)
+  {
+    scanHeadIndexFromNor();
+  }
+}
+
+uint32_t headIndex()
+{
+  ensureHeadCached();
+  return headCache_;
+}
+
+void setHeadIndex(uint32_t v)
+{
+  headCache_ = v;
+  headCached_ = true;
+}
 
 /* 消去待ち状態機械。Poll()から毎回呼ばれても即戻る - HAL_Delayは使わない。
  * Idle以外の間は新規書き込みを保留する(消去中のサブセクタには書けない)。 */
@@ -169,7 +283,8 @@ void Poll()
   }
 
   uint32_t absIndex = headIndex();
-  if (eraseState_ == EraseState::Idle && offsetInSubsector(absIndex) == 0U)
+  bool atSubsectorStart = (offsetInSubsector(absIndex) == 0U);
+  if (eraseState_ == EraseState::Idle && atSubsectorStart)
   {
     beginEraseIfNeeded(absIndex);
     if (eraseState_ == EraseState::Erasing)
@@ -178,10 +293,14 @@ void Poll()
     }
   }
 
-  uint32_t addr = kRegionBase + subsectorOf(absIndex) * kSubsectorSize + offsetInSubsector(absIndex);
+  if (atSubsectorStart && !writeSubsectorHeader(subsectorOf(absIndex), absIndex))
+  {
+    return; /* ヘッダが書けなければこのレコードも書かない(次回再試行) */
+  }
+
   Record out = {rec.tick_ms, rec.wall_ms, rec.event, rec.ret_val};
-  if (BSP_OSPI_NOR_Write(0, reinterpret_cast<const uint8_t *>(&out), addr, sizeof(out)) ==
-      BSP_ERROR_NONE)
+  if (BSP_OSPI_NOR_Write(0, reinterpret_cast<const uint8_t *>(&out), recordAddr(absIndex),
+                         sizeof(out)) == BSP_ERROR_NONE)
   {
     syncedStateLogCount_++;
     setHeadIndex(absIndex + 1U);
@@ -236,8 +355,8 @@ bool Get(uint32_t index, Record &out)
   /* 保持中の最古の絶対番号: 満杯なら head-kCapacity、未満杯なら0。 */
   uint32_t oldestAbs = (head > kCapacity) ? (head - kCapacity) : 0U;
   uint32_t absIndex = oldestAbs + index;
-  uint32_t addr = kRegionBase + subsectorOf(absIndex) * kSubsectorSize + offsetInSubsector(absIndex);
-  return BSP_OSPI_NOR_Read(0, reinterpret_cast<uint8_t *>(&out), addr, sizeof(out)) == BSP_ERROR_NONE;
+  return BSP_OSPI_NOR_Read(0, reinterpret_cast<uint8_t *>(&out), recordAddr(absIndex), sizeof(out)) ==
+         BSP_ERROR_NONE;
 }
 
 } // namespace nvm_log
