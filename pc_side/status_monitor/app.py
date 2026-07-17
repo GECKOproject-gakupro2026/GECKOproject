@@ -599,13 +599,42 @@ class StatusMonitorApp:
     def _on_idle_beacon(self, body: bytes) -> None:
         """CMD_IDLE_BEACON: IDLE中の生存確認+状態通知(センサー値は載らない)。
         state-machine rebuild後はIDLEでセンサーを取得も送信もしないので、
-        代わりにこれで状態ラベルとfpsカウンタ用のframe_countを更新する。"""
+        代わりにこれで状態ラベルとfpsカウンタ用のframe_countを更新する。
+        IDLE中は実際のセンサー値が更新され続けないので、前回ACTIVE時の値が
+        古いまま表示され続けるのを避けるため、表示は "-" にリセットする。"""
         uptime_ms, device_state = protocol.decode_idle_beacon(body)
         self.frame_count += 1
         label = self.DEVICE_STATE_LABELS.get(device_state, f"?({device_state})")
         self.dev_state_var.set(f"状態: {label}")
         secs = uptime_ms // 1000
         self.uptime_var.set(f"{secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}")
+        if device_state == 0:
+            self._clear_sensor_display()
+
+    def _clear_sensor_display(self) -> None:
+        """IDLE中(実センサー値の更新なし)の表示を "-" にリセットする。
+        dev_state_var/uptime_varは_on_idle_beaconが引き続き更新するので対象外。"""
+        self.button_canvas.itemconfigure(self.button_led, fill="gray70")
+        for var in self.env_vars.values():
+            var.set("--")
+        for var in self.mot_vars.values():
+            var.set("--")
+        self.radio_vars["ble"].set("--")
+        self.radio_vars["wifi"].set("--")
+        self.rms_bar["value"] = 0
+        self.rms_var.set("--")
+        self.peak_bar["value"] = 0
+        self.peak_var.set("--")
+        self.wave_canvas.delete("wave")
+        # メモリ使用量(ram/heap/flash)とデバイス識別情報(uid/idcode/reset_cause等)
+        # はマイコンの静的/準静的な状態でありIDLE中も本来の値が存在するので、
+        # ダッシュボードのメモリ表示と同様に前回値を残す。
+        keep = {"ram_used", "ram_total", "heap_used", "heap_free",
+                "flash_used", "flash_total", "flash_kb", "uid", "idcode",
+                "reset_cause", "sysclk_hz", "hclk_hz", "vdda_mv"}
+        for key, _label in self.ALL_FIELDS:
+            if key not in keep:
+                self._tree_set(key, "--")
 
     def _on_log_resp(self, body: bytes) -> None:
         start_index, records = protocol.decode_log_resp(body)
