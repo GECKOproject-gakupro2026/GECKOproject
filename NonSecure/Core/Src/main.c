@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "app_loop.h"
 #include "board_io.h"
+#include "sensor_store.h"
 #include "comm_api.h"
 #include "sensors.h"
 #include "ns_audio.h"
@@ -40,7 +41,7 @@
 /* OTA-updatable NonSecure application. Bump NS_APP_VERSION and re-flash over
  * the air to see the LED pattern change - the running version is proven by
  * how the LEDs blink (see the app loop below). */
-#define NS_APP_VERSION   29U
+#define NS_APP_VERSION   30U
 
 /* Version banner placed at a fixed offset so the Secure loader (and a host
  * tool) can read the staged/running NonSecure version without executing it.
@@ -109,6 +110,7 @@ int main(void)
   /* Initialize all configured peripherals */
   /* USER CODE BEGIN 2 */
   Board_Init();
+  SensorStore_Init();
   Sensors_Init();
   Audio_Init();
   /* Publish the running version for the Secure side / host tools */

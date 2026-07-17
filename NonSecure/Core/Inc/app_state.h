@@ -11,12 +11,15 @@
   *          このヘッダは HAL も BSP も知らない。時刻(now_ms)と、リンク状態
   *          ビット(Comm_GetLinkStatus 相当)を引数で受け取り、LED/センサー/
   *          通信は契約ヘッダ(board_io.h / sensors.h / comm_api.h)経由で叩く。
+  *
+  *          センサーデータは sensor_store.h が単一インスタンスを所有する
+  *          (プロジェクト全体で共有)。この構造体はもう FullStatus_t を
+  *          直接持たない - 取得(Acquire*)で上書きし、送信(GetForSend)で
+  *          読むだけ、という役割分担を sensor_store 側に固定してある。
   ******************************************************************************
   */
 #ifndef APP_STATE_H
 #define APP_STATE_H
-
-#include "comm_dto.h" /* FullStatus_t */
 
 #include <stdint.h>
 
@@ -46,7 +49,6 @@ typedef struct
   uint8_t    haveAcquired;     /* ACQUIRE済み(次回送信用スナップショットが新鮮) */
   AppState_t lastReportedState; /* 前回 Comm_SetDeviceState() に渡した値
                                     (変化した時だけ呼ぶための比較用) */
-  FullStatus_t st;             /* 最新スナップショット(Trigger_Poll にも渡す) */
 } AppStateCtx_t;
 
 /* コンテキストを初期化する(起動直後はACTIVE、now を基準に各タイマーを張る)。 */
@@ -54,7 +56,7 @@ void AppState_Init(AppStateCtx_t *ctx, uint32_t now_ms);
 
 /* 状態機械を1周進める。now_ms は現在時刻、linkStatus は Comm_GetLinkStatus()
  * のビット(bit2=BLE接続中, bit3=TCPクライアント)。内部で Trigger_Poll /
- * build_status / Comm_SendTelemetry / LED / ToF を叩く。 */
+ * sensor_store(Acquire/GetForSend) / Comm_SendTelemetry / LED / ToF を叩く。 */
 void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus);
 
 #ifdef __cplusplus

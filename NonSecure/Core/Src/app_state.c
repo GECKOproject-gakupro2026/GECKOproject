@@ -14,7 +14,7 @@
 #include "app_config.h"
 #include "board_io.h"
 #include "comm_api.h"
-#include "ns_audio.h"
+#include "sensor_store.h"
 #include "sensors.h"
 #include "triggers.h"
 
@@ -23,17 +23,6 @@
 /* Comm_GetLinkStatus のビット(comm_api.h と一致): bit2=BLE接続中, bit3=TCP client */
 #define LINK_BIT_BLE_CONNECTED  (1U << 2)
 #define LINK_BIT_TCP_CLIENT     (1U << 3)
-
-/* 最新スナップショットを埋める(旧 app_loop.c の build_status と同一)。 */
-static void build_status(FullStatus_t *st)
-{
-  Sensors_Refresh(st);
-  Audio_Refresh(st);
-  Comm_GetMcuInfo(st);
-  st->ver = 2U;
-  st->uptime_ms = HAL_GetTick();
-  st->button = Board_ButtonRead();
-}
 
 void AppState_Init(AppStateCtx_t *ctx, uint32_t now_ms)
 {
@@ -79,7 +68,7 @@ static int wake_requested(const AppStateCtx_t *ctx, uint32_t now_ms, uint32_t li
 void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 {
   /* トリガー(ホスト通信/照度/音圧)を毎周ポーリング。発火で活動時刻を更新。 */
-  if (Trigger_Poll(&ctx->st) != TRIG_NONE)
+  if (Trigger_Poll(SensorStore_Peek()) != TRIG_NONE)
   {
     ctx->lastActivityMs = now_ms;
   }
@@ -155,12 +144,14 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 
   if (ctx->state == STATE_IDLE)
   {
-    /* IDLE: 低頻度で送るだけ(取得と送信を分けるほどの精度は不要)。 */
+    /* IDLE: 低頻度で送るだけ(取得と送信を分けるほどの精度は不要)。
+     * このStepでは挙動不変 - sensor_store経由になっただけで、まだ全センサー
+     * (SensorStore_AcquireAll)を取得・送信している。IDLE専用の扱いはStep2。 */
     if ((int32_t)(now_ms - ctx->nextTelemetryMs) >= 0)
     {
       ctx->nextTelemetryMs = now_ms + CFG_IDLE_TELEMETRY_MS;
-      build_status(&ctx->st);
-      (void)Comm_SendTelemetry(&ctx->st);
+      SensorStore_AcquireAll();
+      (void)Comm_SendTelemetry(SensorStore_GetForSend());
       ctx->commReturnMs = HAL_GetTick();
     }
     /* IDLE中は次回ACTIVE突入時に取得し直す。 */
@@ -181,9 +172,9 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
     if (!ctx->haveAcquired)
     {
       /* 初回や IDLE 復帰直後: 送信前に一度取得しておく。 */
-      build_status(&ctx->st);
+      SensorStore_AcquireAll();
     }
-    (void)Comm_SendTelemetry(&ctx->st);
+    (void)Comm_SendTelemetry(SensorStore_GetForSend());
     ctx->commReturnMs = HAL_GetTick();
     ctx->state = STATE_ACTIVE_COMM;
 
@@ -195,7 +186,7 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
     }
 
     /* --- ACQUIRE --- 次フレーム用スナップショットを先読み。 */
-    build_status(&ctx->st);
+    SensorStore_AcquireAll();
     ctx->haveAcquired = 1U;
     ctx->state = STATE_ACTIVE_ACQUIRE;
   }
