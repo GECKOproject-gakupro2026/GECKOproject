@@ -30,7 +30,7 @@ static uint16_t s_envPeriodMs    = 100U; /* 10Hz。HTS221のODR上限12.5Hzが
                                              実質の物理下限(1/7/12.5Hzの3段階
                                              しかない)ので、これが最善 */
 static uint16_t s_lightPeriodMs  = 100U; /* 10Hz。要 IT100(積分時間) */
-static uint16_t s_tofPeriodMs    = 100U; /* 10Hz。要 profile.Frequency=10(Step4) */
+static uint16_t s_tofPeriodMs    = 100U; /* 10Hz。profile.Frequency=10(Step4で変更) */
 static uint16_t s_motionPeriodMs = 0U;   /* 0=毎回(周期なし) */
 
 /* Sensors_SetPeriod() の下限クランプ値。ハード制約を割るとI2Cがメインループを
@@ -51,7 +51,7 @@ static void tofInitAndStart(void)
     RANGING_SENSOR_ProfileConfig_t profile = {0};
     profile.RangingProfile = RS_PROFILE_4x4_CONTINUOUS;
     profile.TimingBudget = 30;
-    profile.Frequency = 5;
+    profile.Frequency = 10;
     profile.EnableAmbient = 0;
     profile.EnableSignal = 0;
     if (BSP_RANGING_SENSOR_ConfigProfile(0, &profile) == BSP_ERROR_NONE &&
