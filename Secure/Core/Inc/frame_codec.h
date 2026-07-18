@@ -49,6 +49,9 @@ extern "C" {
 #define FRAME_CMD_IDLE_BEACON  0x14U   /* board->PC: alive-but-idle ping, no sensor data */
 #define FRAME_CMD_SET_SENSOR_RATE 0x15U /* PC->board: [sensor_id u8][period_ms u16 LE] */
 #define FRAME_CMD_STATUS_FRAG  0x16U   /* board->PC: raw TLV, FullStatus split over BLE */
+#define FRAME_CMD_REC_RESEND   0x17U   /* PC->board: [seq u16 LE], resend one lost REC_CHUNK */
+#define FRAME_CMD_REC_GET      0x18U   /* PC->board: [seq u16 LE], poll one REC_CHUNK (stop&wait) */
+#define FRAME_CMD_REC_INFO     0x19U   /* board->PC: [total_samples u32][total_chunks u16], reply to REC_STOP */
 #define FRAME_CMD_ACK          0x7EU   /* {orig_cmd, orig_seq, u32 arg}      */
 #define FRAME_CMD_NACK         0x7FU   /* {orig_cmd, orig_seq, u8 error}     */
 

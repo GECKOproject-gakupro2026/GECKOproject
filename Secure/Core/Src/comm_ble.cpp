@@ -39,6 +39,10 @@ uint8_t bleSeq_ = 0;   /* Service のメンバから移す（BLE専用のシー�
 uint16_t bleFragSeq_ = 0;
 uint8_t bleFragIdx_ = 0; /* 次に送るフラグメント番号(0..kFragCount-1) */
 
+/* REC_CHUNK 1個あたりのADPCMペイロード長。REC_GET の応答オフセットは
+ * seq*kRecChunkPayload バイト目。 */
+constexpr uint32_t kRecChunkPayload = 58U;
+
 /* --- BLE recording control/transfer state --- */
 Frame_Decoder bleWriteDecoder;
 bool bleWriteDecoderInit = false;
@@ -48,9 +52,29 @@ volatile bool bleHostActivity = false; /* any GATT write (fe41) since the last
                                     TakeHostActivity(): keeps the NS idle timer
                                     awake over BLE, mirroring how any inbound
                                     UART/TCP byte sets nsActivity */
-bool bleRecSendPending = false;
+
+/* 録音転送はハイブリッド方式:
+ *  (1) REC_STOP 後、まず全チャンクをペーシング付き自動プッシュで高速に送る
+ *      (bleRecPushActive / bleRecOff / bleRecChunkSeq)。gap を空けて BLE 無線層の
+ *      ドロップを抑えるが、それでも取りこぼしは起きうる。
+ *  (2) 送り終えたら REC_INFO(総サンプル/総チャンク)を1回返す(bleRecInfoPending)。
+ *  (3) PC は受信済み seq と総数を突き合わせ、欠落だけを REC_GET で再要求する。
+ *      GATT コールバックが seq をキュー(bleGetQueue)に積み、ServeRecGet() が
+ *      1 poll = 1 REC_CHUNK で応答する。少数の欠落を埋めるだけなので速い。
+ * これで「大部分は高速な自動プッシュ、残りは確実な再要求」を両立する。 */
+bool bleRecPushActive = false;
 uint32_t bleRecOff = 0;
 uint16_t bleRecChunkSeq = 0;
+bool bleRecInfoPending = false;
+
+/* notify 送信のペーシング用。前回チャンク送信 tick。 */
+uint32_t bleLastChunkTick = 0;
+constexpr uint32_t kRecNotifyGapMs = 12U;
+
+constexpr uint32_t kGetQueueLen = 32U;
+volatile uint16_t bleGetQueue[kGetQueueLen];
+volatile uint32_t bleGetHead = 0; /* 次に取り出す位置 */
+volatile uint32_t bleGetTail = 0; /* 次に積む位置 */
 
 /* Raw AT exchange (polling, before the interrupt-driven client starts):
  * prints the module's literal reply so protocol mismatches are visible. */
@@ -238,75 +262,130 @@ void SendStatusFrag(const telemetry::FullStatus &st)
   }
 }
 
-/* recorder::Stop() flips bleRecCmd==2 handling (see comm_service.cpp's
- * poll(), which calls recorder::Stop() then sets bleRecSendPending) - this
- * function just drains the ring a few chunks per call. REC_CHUNK/REC_END
- * are NOT run through Frame_Encode: a 47-byte frame_codec frame already
- * barely fit the AT-server's 64-byte characteristic (see the str_received[64]
- * overflow this project hit at 47 bytes), and REC_CHUNK's ~58-byte ADPCM
- * payload plus an 8-byte frame_codec overhead would risk the same margin -
- * so this uses a minimal raw TLV instead: [cmd u8][seq u16 LE][payload]. */
-void PumpRecTx()
+/* REC_CHUNK/REC_INFO は Frame_Encode を通さない: 47バイトの frame_codec フレーム
+ * でも AT サーバの64バイト特性(str_received[64])のマージンぎりぎりなので、生TLV
+ * [cmd u8][seq u16 LE][payload] を使う。 */
+
+/* 実際に REC_INFO(総サンプル数・総チャンク数)を1つ notify で返す。 */
+void sendRecInfoNotify()
 {
-  if (!bleRecSendPending || !bleLinkOk || !bleConnected)
+  uint32_t used = recorder::UsedBytes();
+  uint32_t totalChunks = (used + kRecChunkPayload - 1U) / kRecChunkPayload; /* ceil */
+  uint32_t totalSamples = recorder::TotalSamples();
+
+  uint8_t info[1U + 4U + 2U];
+  info[0] = FRAME_CMD_REC_INFO;
+  info[1] = static_cast<uint8_t>(totalSamples & 0xFFU);
+  info[2] = static_cast<uint8_t>((totalSamples >> 8) & 0xFFU);
+  info[3] = static_cast<uint8_t>((totalSamples >> 16) & 0xFFU);
+  info[4] = static_cast<uint8_t>((totalSamples >> 24) & 0xFFU);
+  info[5] = static_cast<uint8_t>(totalChunks & 0xFFU);
+  info[6] = static_cast<uint8_t>((totalChunks >> 8) & 0xFFU);
+
+  stm32wb_at_BLE_NOTIF_VAL_t notif = {};
+  notif.svc_index = 1;
+  notif.char_index = 2;
+  notif.val_tab_len = sizeof(info);
+  memcpy(notif.val_tab, info, sizeof(info));
+  (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
+}
+
+/* REC_STOP を受けて自動プッシュ転送を開始する。前回の REC_GET 積み残しも捨てる。 */
+void SendRecInfo_Arm()
+{
+  bleRecPushActive = true;
+  bleRecOff = 0;
+  bleRecChunkSeq = 0;
+  bleRecInfoPending = false;
+  bleGetHead = bleGetTail; /* 前回の要求キューを破棄 */
+}
+
+/* 自動プッシュ: ペーシングを空けつつ、1 poll = 1 REC_CHUNK で先頭から順に送る。
+ * 全部送り終えたら REC_INFO を1回返し、以降は PC が欠落を REC_GET で埋める。 */
+void SendRecInfo()
+{
+  if (!bleLinkOk || !bleConnected)
   {
     return;
   }
 
-  constexpr uint32_t kChunkPayload = 58U;
-  /* Was 2 (~200 ms/notify at the original 9600 baud). The control UART is now
-   * 115200 (~12x faster; see comm_ble::Init()/CFG_BLE_BAUDRATE), and
-   * Service::poll() now suppresses SendStatus() for the whole recording drain
-   * (see comm_service.cpp's IsRecTxActive() gate) so this pump no longer has
-   * to share the fe42 notify link/UART4 with 10 Hz sensor telemetry - it can
-   * safely push more chunks per call. */
-  constexpr uint32_t kChunksPerPump = 8U;
-
-  for (uint32_t i = 0; i < kChunksPerPump; i++)
+  /* プッシュ完了後: REC_INFO を返して自動プッシュ段階を終える。 */
+  if (bleRecInfoPending)
   {
-    uint8_t raw[3U + kChunkPayload];
-    uint32_t n = recorder::Read(bleRecOff, &raw[3], kChunkPayload);
-    if (n == 0U)
-    {
-      /* Ring drained: send REC_END with the total sample count + CRC16
-       * over everything sent so far (offset 0..bleRecOff), so the PC can
-       * verify nothing was dropped mid-stream. */
-      uint8_t end[1U + 4U + 2U];
-      end[0] = FRAME_CMD_REC_END;
-      uint32_t total = recorder::TotalSamples();
-      end[1] = static_cast<uint8_t>(total & 0xFFU);
-      end[2] = static_cast<uint8_t>((total >> 8) & 0xFFU);
-      end[3] = static_cast<uint8_t>((total >> 16) & 0xFFU);
-      end[4] = static_cast<uint8_t>((total >> 24) & 0xFFU);
-      uint16_t crc = Frame_Crc16(end, 5U);
-      end[5] = static_cast<uint8_t>(crc & 0xFFU);
-      end[6] = static_cast<uint8_t>(crc >> 8);
-
-      stm32wb_at_BLE_NOTIF_VAL_t notif = {};
-      notif.svc_index = 1;
-      notif.char_index = 2;
-      notif.val_tab_len = sizeof(end);
-      memcpy(notif.val_tab, end, sizeof(end));
-      (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
-
-      bleRecSendPending = false;
-      bleRecOff = 0;
-      return;
-    }
-
-    raw[0] = FRAME_CMD_REC_CHUNK;
-    raw[1] = static_cast<uint8_t>(bleRecChunkSeq & 0xFFU);
-    raw[2] = static_cast<uint8_t>(bleRecChunkSeq >> 8);
-    bleRecChunkSeq++;
-    bleRecOff += n;
-
-    stm32wb_at_BLE_NOTIF_VAL_t notif = {};
-    notif.svc_index = 1;
-    notif.char_index = 2;
-    notif.val_tab_len = static_cast<uint8_t>(3U + n);
-    memcpy(notif.val_tab, raw, 3U + n);
-    (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
+    sendRecInfoNotify();
+    bleRecInfoPending = false;
+    return;
   }
+
+  if (!bleRecPushActive)
+  {
+    return;
+  }
+
+  /* ペーシング。 */
+  uint32_t nowTick = HAL_GetTick();
+  if ((nowTick - bleLastChunkTick) < kRecNotifyGapMs)
+  {
+    return;
+  }
+
+  uint8_t raw[3U + kRecChunkPayload];
+  uint32_t n = recorder::Read(bleRecOff, &raw[3], kRecChunkPayload);
+  if (n == 0U)
+  {
+    /* 送り切った: 次の poll で REC_INFO を返す。 */
+    bleRecPushActive = false;
+    bleRecInfoPending = true;
+    return;
+  }
+  raw[0] = FRAME_CMD_REC_CHUNK;
+  raw[1] = static_cast<uint8_t>(bleRecChunkSeq & 0xFFU);
+  raw[2] = static_cast<uint8_t>(bleRecChunkSeq >> 8);
+  bleRecChunkSeq++;
+  bleRecOff += n;
+
+  stm32wb_at_BLE_NOTIF_VAL_t notif = {};
+  notif.svc_index = 1;
+  notif.char_index = 2;
+  notif.val_tab_len = static_cast<uint8_t>(3U + n);
+  memcpy(notif.val_tab, raw, 3U + n);
+  (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
+  bleLastChunkTick = nowTick;
+}
+
+/* REC_GET 要求キューから1件取り出し、その seq の REC_CHUNK を1つ返す
+ * (1 poll = 最大1 notify)。取りこぼしたら PC が同じ seq を再要求するので、
+ * ここでは信頼性のための再送やペーシングは不要 - PC のポーリングが律速。 */
+void ServeRecGet()
+{
+  if (bleGetHead == bleGetTail)
+  {
+    return; /* キューが空 */
+  }
+  if (!bleLinkOk || !bleConnected)
+  {
+    return;
+  }
+  uint16_t seq = bleGetQueue[bleGetHead];
+  bleGetHead = (bleGetHead + 1U) % kGetQueueLen;
+
+  uint8_t raw[3U + kRecChunkPayload];
+  uint32_t off = static_cast<uint32_t>(seq) * kRecChunkPayload;
+  uint32_t n = recorder::Read(off, &raw[3], kRecChunkPayload);
+  if (n == 0U)
+  {
+    return; /* 範囲外: 返さない(PCは total_chunks で範囲を知っているので要求しない) */
+  }
+  raw[0] = FRAME_CMD_REC_CHUNK;
+  raw[1] = static_cast<uint8_t>(seq & 0xFFU);
+  raw[2] = static_cast<uint8_t>(seq >> 8);
+
+  stm32wb_at_BLE_NOTIF_VAL_t notif = {};
+  notif.svc_index = 1;
+  notif.char_index = 2;
+  notif.val_tab_len = static_cast<uint8_t>(3U + n);
+  memcpy(notif.val_tab, raw, 3U + n);
+  (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
 }
 
 uint8_t TakeRecCmd()
@@ -323,13 +402,12 @@ bool TakeHostActivity()
   return active;
 }
 
-void StartRecTx()
+bool IsRecTxActive()
 {
-  bleRecSendPending = true;
-  bleRecOff = 0;
+  /* 自動プッシュ中、REC_INFO 未応答、または REC_GET キューにデータがある間は
+   * 転送中扱い(この間テレメトリを止めて notify リンクを録音転送に譲る)。 */
+  return bleRecPushActive || bleRecInfoPending || (bleGetHead != bleGetTail);
 }
-
-bool IsRecTxActive() { return bleRecSendPending; }
 
 } // namespace comm_ble
 
@@ -446,6 +524,20 @@ extern "C" uint8_t stm32wb_at_BLE_EVT_WRITE_cb(stm32wb_at_BLE_EVT_WRITE_t *param
       else if (cmd == FRAME_CMD_REC_STOP)
       {
         comm_ble::bleRecCmd = 2U;
+      }
+      else if (cmd == FRAME_CMD_REC_GET && len >= 2U)
+      {
+        /* 要求チャンクseqをキューに積むだけ(REC_CHUNK応答のUART送信は poll() の
+         * ServeRecGet() が担当)。キュー満杯なら積まない(PCがタイムアウトで
+         * 再要求するので取りこぼしと同じ扱いになり安全)。 */
+        uint16_t gseq = static_cast<uint16_t>(payload[0] |
+                        (static_cast<uint16_t>(payload[1]) << 8));
+        uint32_t nextTail = (comm_ble::bleGetTail + 1U) % comm_ble::kGetQueueLen;
+        if (nextTail != comm_ble::bleGetHead)
+        {
+          comm_ble::bleGetQueue[comm_ble::bleGetTail] = gseq;
+          comm_ble::bleGetTail = nextTail;
+        }
       }
     }
   }

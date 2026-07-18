@@ -915,9 +915,10 @@ void Service::poll()
   else if (recCmd == 2U)
   {
     recorder::Stop();
-    comm_ble::StartRecTx();
+    comm_ble::SendRecInfo_Arm(); /* REC_INFO を返す準備。PC が REC_GET で取りに来る */
   }
-  comm_ble::PumpRecTx();
+  comm_ble::SendRecInfo();  /* 停止直後に総数を1回返す */
+  comm_ble::ServeRecGet();  /* PC の REC_GET 要求に1件応答(ストップ&ウェイト) */
 
   if (telemetryEnabled && static_cast<int32_t>(now - nextBleTick_) >= 0)
   {

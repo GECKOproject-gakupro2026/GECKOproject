@@ -36,6 +36,9 @@ CMD_LOG_RESET = 0x13    # PC->board: erase the non-volatile state log
 CMD_IDLE_BEACON = 0x14  # board->PC: "<IB" uptime_ms/device_state, no sensor data
 CMD_SET_SENSOR_RATE = 0x15  # PC->board: "<BH" sensor_id/period_ms (0=env,1=light,2=tof,3=motion)
 CMD_STATUS_FRAG = 0x16  # board->PC: raw TLV, FullStatus split over BLE (not frame_codec)
+CMD_REC_RESEND = 0x17   # PC->board: [seq u16 LE], resend one lost REC_CHUNK (legacy)
+CMD_REC_GET = 0x18      # PC->board: [seq u16 LE], poll one REC_CHUNK (stop&wait)
+CMD_REC_INFO = 0x19     # board->PC: [total_samples u32][total_chunks u16], reply to REC_STOP
 CMD_ACK = 0x7E          # "<BBI" orig_cmd/orig_seq/arg
 CMD_NACK = 0x7F         # "<BBB" orig_cmd/orig_seq/error
 
@@ -93,6 +96,9 @@ MINI_FMT_V2 = "<BhHHHH3h3h3hhhHhBB"
 MINI_SIZE_V2 = struct.calcsize(MINI_FMT_V2)  # 39 (v2: all sensors)
 
 AUDIO_SAMPLE_RATE = 16000
+# BLE録音は転送量削減のため board 側で 16 kHz -> 8 kHz に 2:1 デシメートしている
+# (recorder.cpp の FeedPcm)。WAV は 8 kHz で書き出す。
+REC_SAMPLE_RATE = 8000
 
 
 def decode_audio(payload: bytes) -> list[int]:

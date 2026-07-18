@@ -29,11 +29,6 @@ bool IsConnected();
  * 未接続なら何もしない。 */
 void SendStatus(const telemetry::FullStatus &st);
 
-/* recorder::Stop()後に録音済みADPCMデータをREC_CHUNK/REC_END生TLVで
- * notify送信するポンプ。呼ぶたびに数チャンクだけ送る(BLE 9600baud律速)。
- * 送信対象がなければ何もしない。Service::poll()から毎回呼ぶ想定。 */
-void PumpRecTx();
-
 /* BLE write(fe41)で受信したREC_START/STOPコマンドを取り出す。
  * 戻り値: 0=なし, 1=start, 2=stop。呼ぶと内部状態は0にクリアされる。 */
 uint8_t TakeRecCmd();
@@ -43,13 +38,25 @@ uint8_t TakeRecCmd();
  * nsActivity相当。呼ぶと内部状態はfalseにクリアされる。 */
 bool TakeHostActivity();
 
-/* PumpRecTx()に「録音データの送信待ちがある」ことを伝える。
- * Service::poll()がrecorder::Stop()を呼んだ直後に呼ぶ。 */
-void StartRecTx();
+/* 録音停止(REC_STOP)を受けて「REC_INFO を返す準備」を立てる。Service::poll()が
+ * recorder::Stop() 直後に呼ぶ。 */
+void SendRecInfo_Arm();
 
-/* PumpRecTx()が録音データをまだ送信中(=bleRecSendPendingが立っている)か。
- * Service::poll()がこれを見てSendStatus(センサーテレメトリ)を一時停止し、
- * 音声送信の間はBLEの notify リンクを占有できるようにする。 */
+/* 録音停止(REC_STOP)直後に、録音の総サンプル数と総チャンク数を FRAME_CMD_REC_INFO
+ * でPCへ返す。PCはこれを見て REC_GET で1チャンクずつ取りに来る(ストップ&ウェイト)。
+ * BLE notify は取りこぼしうるので、自動プッシュではなくPC主導のポーリングにして
+ * 確実性を担保する。 */
+void SendRecInfo();
+
+/* PC からの録音チャンク取得要求(FRAME_CMD_REC_GET)を1件処理する。GATT write
+ * コールバックが要求 seq をキューに積み、この関数を Service::poll() から毎回
+ * 呼んでキューから1件取り出し、その seq の REC_CHUNK を1つ返す(割り込み文脈で
+ * UART送信しないための分離)。キューが空なら何もしない。 */
+void ServeRecGet();
+
+/* 録音転送(REC_INFO 未応答 or REC_GET キューにデータあり)が進行中か。
+ * Service::poll() がこれを見て SendStatus(センサーテレメトリ)を一時停止し、
+ * 録音転送に notify リンクを譲る。 */
 bool IsRecTxActive();
 
 /* FullStatus(165B)全体をFRAME_CMD_STATUS_FRAGの生TLVで3フラグメントに

@@ -106,6 +106,10 @@ class StatusMonitorApp:
         self.recording = False
         self.record_samples: list[int] = []
         self.ble_rec_chunks: dict[int, bytes] = {}
+        # BLE録音のポーリング取得(CMD_REC_GET/REC_INFO)用の進行状態
+        self.ble_rec_total_samples = 0
+        self.ble_rec_total_chunks = 0
+        self.ble_rec_get_round = 0
         self.last_wav: pathlib.Path | None = None
 
         # Step 7-3: full-sensor BLE fragment reassembly (CMD_STATUS_FRAG).
@@ -711,14 +715,14 @@ class StatusMonitorApp:
             return
         self._save_wav(self.record_samples)
 
-    def _save_wav(self, samples: list[int]) -> None:
+    def _save_wav(self, samples: list[int], sample_rate: int | None = None) -> None:
         RECORD_DIR.mkdir(exist_ok=True)
         name = _dt.datetime.now().strftime("rec_%Y%m%d_%H%M%S.wav")
         path = RECORD_DIR / name
         with wave.open(str(path), "wb") as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
-            wav.setframerate(protocol.AUDIO_SAMPLE_RATE)
+            wav.setframerate(sample_rate or protocol.AUDIO_SAMPLE_RATE)
             import struct as _struct
             wav.writeframes(_struct.pack(f"<{len(samples)}h", *samples))
         secs = len(samples) / protocol.AUDIO_SAMPLE_RATE
@@ -768,34 +772,70 @@ class StatusMonitorApp:
             self.ble_frag_status = status
             self._apply_ble_alldata(status)
 
+    # BLE録音転送はストップ&ウェイトのポーリング方式(comm_ble.cpp参照)。
+    #   REC_INFO: [cmd u8][total_samples u32 LE][total_chunks u16 LE]  (board->PC)
+    #   REC_GET:  [seq u16 LE]  (PC->board, frame_codec)   -> 該当 REC_CHUNK 1個
+    #   REC_CHUNK:[cmd u8][seq u16 LE][adpcm payload]       (board->PC, raw TLV)
+    # BLE notify は Write-Without-Response 相当で取りこぼしうるので、自動プッシュ
+    # ではなく PC が未取得 seq を要求し続けて確実に全チャンクを回収する。
+    _REC_GET_WINDOW = 6      # 一度に投げる REC_GET 要求数(パイプライン窓)
+    _REC_GET_POLL_MS = 250   # 窓を投げてから未達を再チェックするまでの待ち
+
     def _handle_ble_rec_notify(self, payload: bytes) -> None:
-        # Raw TLV, not frame_codec (see comm_ble.cpp's PumpRecTx doc comment):
-        #   REC_CHUNK: [cmd u8][seq u16 LE][adpcm payload]
-        #   REC_END:   [cmd u8][total_samples u32 LE][crc16 u16 LE]
         cmd = payload[0]
         if cmd == protocol.CMD_REC_CHUNK and len(payload) > 3:
             seq = payload[1] | (payload[2] << 8)
             self._on_ble_rec_chunk(seq, payload[3:])
-        elif cmd == protocol.CMD_REC_END and len(payload) >= 7:
+        elif cmd == protocol.CMD_REC_INFO and len(payload) >= 7:
             total_samples = struct.unpack_from("<I", payload, 1)[0]
-            self._on_ble_rec_end(total_samples)
+            total_chunks = struct.unpack_from("<H", payload, 5)[0]
+            self._on_ble_rec_info(total_samples, total_chunks)
 
-    def _on_ble_rec_end(self, total_samples: int) -> None:
-        # REC_CHUNKs carry a byte-transparent slice of the board's ADPCM ring;
-        # they do NOT align to ADPCM block boundaries. Concatenate them in seq
-        # order to rebuild the exact block stream, then decode it continuously
-        # (adpcm.decode_stream) - decoding each 58-byte chunk on its own would
-        # reseed the predictor from audio bytes and produce loud noise.
+    def _on_ble_rec_info(self, total_samples: int, total_chunks: int) -> None:
+        self.ble_rec_total_samples = total_samples
+        self.ble_rec_total_chunks = total_chunks
+        self.ble_rec_get_round = 0
+        self._log(f"BLE録音: 転送開始 {total_chunks}チャンク "
+                  f"({total_samples}サンプル)")
+        self._pump_rec_get()
+
+    def _pump_rec_get(self) -> None:
+        # 未取得 seq を先頭から窓ぶんだけ REC_GET で要求し、少し待って再チェック。
+        # 取りこぼした seq は次のラウンドでまた要求されるので、確実に埋まる。
+        if self.transport is None:
+            return
+        missing = [s for s in range(self.ble_rec_total_chunks)
+                   if s not in self.ble_rec_chunks]
+        if not missing:
+            self._finish_ble_rec()
+            return
+        # 進捗が全く無い状態が長く続いたら諦めきれるよう上限ラウンドを設ける
+        if self.ble_rec_get_round > self.ble_rec_total_chunks + 200:
+            self._log(f"BLE録音: {len(missing)}チャンク取得できず(欠落のまま保存)")
+            self._finish_ble_rec()
+            return
+        self.ble_rec_get_round += 1
+        for seq in missing[:self._REC_GET_WINDOW]:
+            self.transport.write(protocol.build_frame(protocol.CMD_REC_GET, 0,
+                                                      struct.pack("<H", seq)))
+        self.root.after(self._REC_GET_POLL_MS, self._pump_rec_get)
+
+    def _finish_ble_rec(self) -> None:
+        # Concatenate chunks in seq order to rebuild the exact block stream,
+        # then decode continuously (adpcm.decode_stream).
         stream = b"".join(self.ble_rec_chunks[seq]
                           for seq in sorted(self.ble_rec_chunks))
         samples = adpcm.decode_stream(stream)
+        got = len(self.ble_rec_chunks)
         self.ble_rec_chunks = {}
-        if len(samples) != total_samples:
+        total_samples = getattr(self, "ble_rec_total_samples", 0)
+        self._log(f"BLE録音: {got}/{self.ble_rec_total_chunks}チャンク取得完了")
+        if total_samples and len(samples) != total_samples:
             self._log(f"BLE録音: サンプル数不一致 got={len(samples)} expected={total_samples}")
         if not samples:
             self._log("BLE録音: データなし")
             return
-        self._save_wav(samples)
+        self._save_wav(samples, protocol.REC_SAMPLE_RATE)
 
     def _play_last(self) -> None:
         if self.last_wav is None:
@@ -818,7 +858,7 @@ class StatusMonitorApp:
                     self._log(payload)
                     continue
                 if (self.link_var.get() == "BLE" and payload
-                        and payload[0] in (protocol.CMD_REC_CHUNK, protocol.CMD_REC_END)):
+                        and payload[0] in (protocol.CMD_REC_CHUNK, protocol.CMD_REC_INFO)):
                     self._handle_ble_rec_notify(payload)
                     continue
                 if (self.link_var.get() == "BLE" and payload
