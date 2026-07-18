@@ -43,9 +43,14 @@ NACK_ERRORS = {1: "BAD_OFFSET", 2: "ERASE", 3: "WRITE", 4: "VERIFY",
                5: "TOO_LARGE", 6: "BAD_STATE"}
 OTA_STATES = {0: "Idle", 1: "Receiving", 2: "Staged", 3: "Error"}
 
-# state_log.hpp / nvm_log.hpp の Record (packed, 13 bytes) と一致させる。
-LOG_RECORD_FMT = "<IIBI"
-LOG_RECORD_SIZE = struct.calcsize(LOG_RECORD_FMT)  # 13
+# nvm_log.hpp の Get() が返す Record (packed, 6 bytes) と一致させる。
+# 旧形式は 13B (tick_ms u32 + wall_ms u32 + event u8 + ret_val u32) だったが、
+# NOR上は 3B ([delta_ms u16][packed u8]) に圧縮され、Get() が絶対 wall_ms を
+# 復元して {wall_ms u32, event u8, ret_val u8} で返す(tick_ms は廃止、
+# ret_val は 0〜15 で 0xF は「本来の値が 4bit に収まらなかった」印)。
+LOG_RECORD_FMT = "<IBB"
+LOG_RECORD_SIZE = struct.calcsize(LOG_RECORD_FMT)  # 6
+LOG_RET_OVERFLOW = 0x0F  # ret_val==0xF: 本来の値が 4bit に収まらなかった
 LOG_EVENT_NAMES = {
     0: "None", 1: "BleActive", 2: "BleIdle", 3: "TcpActive", 4: "TcpIdle",
     5: "UartActive", 6: "UartIdle", 7: "LinkStandby", 8: "CommReturn",
@@ -68,7 +73,7 @@ def decode_status_frag_header(payload: bytes) -> tuple[int, int]:
 
 
 def decode_log_resp(payload: bytes) -> tuple[int, list[tuple]]:
-    """CMD_LOG_RESP payload -> (startIndex, [(tick_ms, wall_ms, event, ret_val), ...])."""
+    """CMD_LOG_RESP payload -> (startIndex, [(wall_ms, event, ret_val), ...])."""
     start_index = struct.unpack("<I", payload[:4])[0]
     count = struct.unpack("<H", payload[4:6])[0]
     records = []

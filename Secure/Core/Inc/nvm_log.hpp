@@ -16,11 +16,18 @@
   *          Poll() 呼び出し1回で完了し、完了待ち(最大400ms)はGetStatusを
   *          後続のPoll()呼び出しへ分散させる(HAL_Delayでブロックしない)。
   *
-  *          ヘッドポインタ(次に書く絶対レコード番号)は各サブセクタ先頭8Bの
-  *          ヘッダ(magic+seq)からNOR自体で復元できるようにしており、SRAMには
-  *          復元後の値をキャッシュするだけ。VBATバックアップの無い本基板では
+  *          ヘッドポインタ(次に書く絶対レコード番号)は各サブセクタ先頭ヘッダ
+  *          (magic+seq+base_wall_ms)からNOR自体で復元できるようにしており、SRAM
+  *          には復元後の値をキャッシュするだけ。VBATバックアップの無い本基板では
   *          USB完全電源断でTAMP->BKPxRの内容も失われることが実機で確認された
   *          (2026-07-17)ため、TAMP->BKP1Rには依存しない。
+  *
+  *          【long-term化(2026-07-19)】1レコードを旧13B(tick+wall+event+ret)
+  *          から3B([delta_ms u16][packed u8])へ圧縮し、記録期間を約4.3倍
+  *          (5024→21776件)に延ばした。delta_ms は同一サブセクタ内で直前レコード
+  *          からの tick_ms 差分、packed は event(4bit)+ret_val(4bit)。絶対時刻は
+  *          サブセクタヘッダの base_wall_ms に delta を累積して復元する。診断専用で
+  *          値域の広い CommReturn(BLE送信所要ms)はNORには落とさない。
   ******************************************************************************
   */
 #ifndef NVM_LOG_HPP
@@ -44,14 +51,25 @@ void Reset();
 /* これまでにNORへ書いた総レコード数(state_log::Count()と同じ意味の永続版)。 */
 uint32_t Count();
 
-/* index番目(0=NOR上に残っている最古)のレコードを out にコピーする
- * (state_log::Record と同一レイアウト)。有効なら true。 */
+/* index番目(0=NOR上に残っている最古)のレコードを out にコピーする。
+ * 有効なら true。
+ *
+ * 【NOR上の格納形式は3バイト】long-term化のため、NORには
+ *   [delta_ms u16][packed u8]
+ * だけを書く(旧13B → 3B、約4.3倍の記録期間)。delta_ms は「同じサブセクタ内で
+ * 直前レコードからの経過ms」で、サブセクタ先頭レコードは 0(基準はサブセクタ
+ * ヘッダの base_wall_ms)。packed は上位4bitが event(0〜12)、下位4bitが
+ * ret_val(0〜15、収まらない値は 0xF=エラーマーカー)。65535ms を超える空白は
+ * event=None/ret=0xF の中継マーカーレコードで表現する。
+ *
+ * 本構造体(Record)は Get() が「復元済みの絶対 wall_ms + event + ret_val」を
+ * 返すための便宜的な形で、NOR上のレイアウトとは別物(PC側は従来の
+ * LOG_RECORD_FMT のうち tick_ms を廃し wall_ms/event/ret_val を受け取る)。 */
 struct __attribute__((packed)) Record
 {
-  uint32_t tick_ms;
-  uint32_t wall_ms;
+  uint32_t wall_ms;  /* 基準(サブセクタ base) + サブセクタ内 delta 累積 */
   uint8_t  event;
-  uint32_t ret_val;
+  uint8_t  ret_val;  /* 0〜15、0xF は「本来の値が4bitに収まらなかった」印 */
 };
 bool Get(uint32_t index, Record &out);
 

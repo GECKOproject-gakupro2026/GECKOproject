@@ -655,10 +655,12 @@ class StatusMonitorApp:
         RECORD_DIR.mkdir(parents=True, exist_ok=True)
         path = RECORD_DIR / _time.strftime("state_log_%Y%m%d_%H%M%S.txt")
         with open(path, "w", encoding="utf-8") as f:
-            f.write("index\ttick_ms\twall_ms\tevent\tret_val\n")
-            for i, (tick_ms, wall_ms, event, ret_val) in enumerate(records):
+            f.write("index\twall_ms\tevent\tret_val\n")
+            for i, (wall_ms, event, ret_val) in enumerate(records):
                 name = protocol.LOG_EVENT_NAMES.get(event, str(event))
-                f.write(f"{i}\t{tick_ms}\t{wall_ms}\t{name}\t{ret_val}\n")
+                # ret_val==0xF は「本来の値が4bitに収まらなかった」印
+                rv = "overflow" if ret_val == protocol.LOG_RET_OVERFLOW else ret_val
+                f.write(f"{i}\t{wall_ms}\t{name}\t{rv}\n")
         self._log(f"ログ保存: {path}")
 
     def _reset_log(self) -> None:
