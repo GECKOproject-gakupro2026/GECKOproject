@@ -35,10 +35,6 @@ bool bleGlueReady = false;
 
 uint8_t bleSeq_ = 0;   /* Service のメンバから移す（BLE専用のシーケンス番号） */
 
-/* --- BLE FRAG (full sensor set) transfer state --- */
-uint16_t bleFragSeq_ = 0;
-uint8_t bleFragIdx_ = 0; /* 次に送るフラグメント番号(0..kFragCount-1) */
-
 /* REC_CHUNK 1個あたりのADPCMペイロード長。REC_GET の応答オフセットは
  * seq*kRecChunkPayload バイト目。 */
 constexpr uint32_t kRecChunkPayload = 58U;
@@ -215,50 +211,6 @@ void SendStatus(const telemetry::FullStatus &st)
   if (notif.val_tab_len > 0U)
   {
     (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
-  }
-}
-
-/* Splits FullStatus (165 B) across FRAME_CMD_STATUS_FRAG raw TLV notifies so
- * the PC can reassemble the same data BLE only ever saw compressed into
- * MiniStatus. Not run through Frame_Encode for the same str_received[64]
- * margin reason as REC_CHUNK/REC_END (see PumpRecTx below): header is
- * [cmd u8][seq u16 LE][frag_idx u8][frag_total u8], payload is a fixed
- * 55-byte slice of FullStatus (165 = 55 x 3, so all 3 fragments are the same
- * size - no short last fragment to special-case). One call sends exactly one
- * fragment; the caller (Service::poll()) drives this at ~1 Hz so a full
- * FullStatus snapshot lands roughly every 3 calls (~3 s at 1 Hz). */
-void SendStatusFrag(const telemetry::FullStatus &st)
-{
-  if (!bleLinkOk || !bleConnected)
-  {
-    return;
-  }
-
-  constexpr uint8_t kFragCount = 3U;
-  constexpr uint32_t kFragPayload = sizeof(telemetry::FullStatus) / kFragCount;
-  static_assert(kFragPayload * kFragCount == sizeof(telemetry::FullStatus),
-                "FullStatus size must split evenly into kFragCount fragments");
-
-  uint8_t raw[4U + kFragPayload];
-  raw[0] = FRAME_CMD_STATUS_FRAG;
-  raw[1] = static_cast<uint8_t>(bleFragSeq_ & 0xFFU);
-  raw[2] = static_cast<uint8_t>(bleFragSeq_ >> 8);
-  raw[3] = bleFragIdx_;
-  const uint8_t *src = reinterpret_cast<const uint8_t *>(&st) + (bleFragIdx_ * kFragPayload);
-  memcpy(&raw[4], src, kFragPayload);
-
-  stm32wb_at_BLE_NOTIF_VAL_t notif = {};
-  notif.svc_index = 1;
-  notif.char_index = 2;
-  notif.val_tab_len = static_cast<uint8_t>(sizeof(raw));
-  memcpy(notif.val_tab, raw, sizeof(raw));
-  (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
-
-  bleFragIdx_++;
-  if (bleFragIdx_ >= kFragCount)
-  {
-    bleFragIdx_ = 0;
-    bleFragSeq_++;
   }
 }
 

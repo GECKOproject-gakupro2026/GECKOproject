@@ -35,8 +35,8 @@ CMD_LOG_RESP = 0x12     # board->PC: u32 startIndex + u16 count + count x LOG_RE
 CMD_LOG_RESET = 0x13    # PC->board: erase the non-volatile state log
 CMD_IDLE_BEACON = 0x14  # board->PC: "<IB" uptime_ms/device_state, no sensor data
 CMD_SET_SENSOR_RATE = 0x15  # PC->board: "<BH" sensor_id/period_ms (0=env,1=light,2=tof,3=motion)
-CMD_STATUS_FRAG = 0x16  # board->PC: raw TLV, FullStatus split over BLE (not frame_codec)
-CMD_REC_RESEND = 0x17   # PC->board: [seq u16 LE], resend one lost REC_CHUNK (legacy)
+# 0x16 was CMD_STATUS_FRAG (BLE full-sensor fragment) - retired with the
+# "BLE全データ" tab. 0x17 was CMD_REC_RESEND (legacy) - superseded by REC_GET.
 CMD_REC_GET = 0x18      # PC->board: [seq u16 LE], poll one REC_CHUNK (stop&wait)
 CMD_REC_INFO = 0x19     # board->PC: [total_samples u32][total_chunks u16], reply to REC_STOP
 CMD_ACK = 0x7E          # "<BBI" orig_cmd/orig_seq/arg
@@ -59,20 +59,6 @@ LOG_EVENT_NAMES = {
     5: "UartActive", 6: "UartIdle", 7: "LinkStandby", 8: "CommReturn",
     9: "DeviceActive", 10: "DeviceIdle", 11: "EnterComm", 12: "StopComm",
 }
-
-
-FRAG_COUNT = 3
-FRAG_PAYLOAD = 55  # FULL_SIZE_V2 (165) / FRAG_COUNT, see comm_ble.cpp's SendStatusFrag
-
-
-def decode_status_frag_header(payload: bytes) -> tuple[int, int]:
-    """CMD_STATUS_FRAG raw TLV -> (seq, frag_idx). Payload layout (not
-    frame_codec, see comm_ble.cpp's SendStatusFrag doc comment):
-    [cmd u8][seq u16 LE][frag_idx u8][slice].
-    """
-    seq = payload[1] | (payload[2] << 8)
-    frag_idx = payload[3]
-    return seq, frag_idx
 
 
 def decode_log_resp(payload: bytes) -> tuple[int, list[tuple]]:

@@ -4,7 +4,7 @@ Shows the board status continuously streamed by the telemetry firmware.
 Tabs:
   - ダッシュボード : main panels (button / sensors / audio level / radio / memory)
   - 全データ       : every decoded value in one table
-  - オーディオ     : live PCM streaming view + WAV recording + playback
+  - オーディオ     : live audio spectrum (Hz vs dB, FFT) + WAV recording + playback
 
 Connect via UART (ST-LINK VCP, 921600 baud), BLE (STM32WB5MMG) or Wi-Fi (TCP).
 
@@ -29,6 +29,8 @@ import tkinter as tk
 import wave
 from tkinter import messagebox, ttk
 from typing import Optional
+
+import numpy as np
 
 import adpcm
 import protocol
@@ -112,10 +114,6 @@ class StatusMonitorApp:
         self.ble_rec_get_round = 0
         self.last_wav: pathlib.Path | None = None
 
-        # Step 7-3: full-sensor BLE fragment reassembly (CMD_STATUS_FRAG).
-        self.ble_frag_parts: dict[int, bytes] = {}
-        self.ble_frag_status: protocol.Status | None = None
-
         # Step D2: non-volatile state log (fetched page-by-page via LOG_REQ).
         self.log_records: list[tuple] = []
         self.log_fetch_next = 0
@@ -188,7 +186,6 @@ class StatusMonitorApp:
 
         self._build_dashboard_tab()
         self._build_alldata_tab()
-        self._build_ble_alldata_tab()
         self._build_audio_tab()
 
         # --- センサー取得周期(Step 3: FRAME_CMD_SET_SENSOR_RATE) ---
@@ -347,27 +344,6 @@ class StatusMonitorApp:
                            ("_audio_frames", "音声フレーム数")]:
             self.tree.insert("", "end", iid=key, values=(label, "--"))
 
-    def _build_ble_alldata_tab(self) -> None:
-        # Step 7-3: FRAME_CMD_STATUS_FRAG reassembly view. MiniStatus (the
-        # dashboard/全データ tab over a BLE link) only ever carries a 39-byte
-        # compact subset; this tab shows the full 165-byte FullStatus that
-        # comm_ble.cpp's SendStatusFrag rebuilds from 3 notifies (~1 Hz), so
-        # values can be diffed field-by-field against a UART/TCP session.
-        body = ttk.Frame(self.notebook, padding=6)
-        self.notebook.add(body, text=" BLE全データ ")
-        ttk.Label(body, foreground="gray40",
-                 text="BLE接続中のみ更新 (FRAME_CMD_STATUS_FRAG, 約1Hzで全項目を再構成)"
-                 ).pack(anchor="w", pady=(0, 4))
-        cols = ("name", "value")
-        self.ble_tree = ttk.Treeview(body, columns=cols, show="headings", height=24)
-        self.ble_tree.heading("name", text="項目")
-        self.ble_tree.heading("value", text="値")
-        self.ble_tree.column("name", width=320, anchor="w")
-        self.ble_tree.column("value", width=380, anchor="w")
-        self.ble_tree.pack(fill="both", expand=True)
-        for key, label in self.ALL_FIELDS:
-            self.ble_tree.insert("", "end", iid=key, values=(label, "--"))
-
     def _build_audio_tab(self) -> None:
         body = ttk.Frame(self.notebook, padding=6)
         self.notebook.add(body, text=" オーディオ ")
@@ -390,7 +366,8 @@ class StatusMonitorApp:
                                      highlightthickness=0)
         self.live_canvas.pack(fill="both", expand=True, pady=4)
 
-        note = ("16kHz / 16bit / モノラル (MIC2, MDF1)。録音は recordings/ にWAV保存。"
+        note = ("16kHz / 16bit / モノラル (MIC2, MDF1)。スペクトラム表示は"
+                "周波数 [Hz] 対 音圧 [dB] (FFT)。録音は recordings/ にWAV保存。"
                 "ボードへ 'a'(開始)/'s'(停止) を送信して制御します。")
         ttk.Label(body, text=note, foreground="gray40").pack(anchor="w")
 
@@ -753,25 +730,6 @@ class StatusMonitorApp:
     def _on_ble_rec_chunk(self, seq: int, payload: bytes) -> None:
         self.ble_rec_chunks[seq] = payload
 
-    def _handle_ble_status_frag(self, payload: bytes) -> None:
-        # Raw TLV, not frame_codec (see comm_ble.cpp's SendStatusFrag doc
-        # comment): [cmd u8][seq u16 LE][frag_idx u8][55-byte slice].
-        if len(payload) < 4 + protocol.FRAG_PAYLOAD:
-            return
-        seq, frag_idx = protocol.decode_status_frag_header(payload)
-        slice_bytes = payload[4:4 + protocol.FRAG_PAYLOAD]
-        if frag_idx == 0:
-            self.ble_frag_parts = {}
-        self.ble_frag_parts[frag_idx] = slice_bytes
-        if len(self.ble_frag_parts) < protocol.FRAG_COUNT:
-            return
-        full = b"".join(self.ble_frag_parts[i] for i in range(protocol.FRAG_COUNT))
-        self.ble_frag_parts = {}
-        status = protocol.decode_status(protocol.CMD_STATUS, full)
-        if status is not None:
-            self.ble_frag_status = status
-            self._apply_ble_alldata(status)
-
     # BLE録音転送はストップ&ウェイトのポーリング方式(comm_ble.cpp参照)。
     #   REC_INFO: [cmd u8][total_samples u32 LE][total_chunks u16 LE]  (board->PC)
     #   REC_GET:  [seq u16 LE]  (PC->board, frame_codec)   -> 該当 REC_CHUNK 1個
@@ -861,10 +819,6 @@ class StatusMonitorApp:
                         and payload[0] in (protocol.CMD_REC_CHUNK, protocol.CMD_REC_INFO)):
                     self._handle_ble_rec_notify(payload)
                     continue
-                if (self.link_var.get() == "BLE" and payload
-                        and payload[0] == protocol.CMD_STATUS_FRAG):
-                    self._handle_ble_status_frag(payload)
-                    continue
                 for item in self.parser.feed(payload):
                     if item[0] == "frame":
                         _tag, cmd, _seq, body = item
@@ -931,16 +885,9 @@ class StatusMonitorApp:
         self.root.after(1000, self._update_rate)
 
     # ---------------- rendering ----------------
-    def _tree_set(self, key: str, value: str, tree: ttk.Treeview | None = None) -> None:
-        t = tree if tree is not None else self.tree
-        if t.exists(key):
-            t.set(key, "value", value)
-
-    def _apply_ble_alldata(self, st: protocol.Status) -> None:
-        for key, _label in self.ALL_FIELDS:
-            value = getattr(st, key)
-            text = f"{value:.2f}" if isinstance(value, float) else str(value)
-            self._tree_set(key, text, tree=self.ble_tree)
+    def _tree_set(self, key: str, value: str) -> None:
+        if self.tree.exists(key):
+            self.tree.set(key, "value", value)
 
     DEVICE_STATE_LABELS = {0: "IDLE", 1: "ACTIVE(取得)", 2: "ACTIVE(通信)"}
 
@@ -1005,7 +952,76 @@ class StatusMonitorApp:
         self._draw_polyline(self.wave_canvas, wave_samples, 32768.0)
 
     def _draw_live_audio(self) -> None:
-        self._draw_polyline(self.live_canvas, self.audio_view, 8192.0)
+        self._draw_spectrum(self.live_canvas, self.audio_view,
+                            protocol.AUDIO_SAMPLE_RATE)
+
+    # 周波数 [Hz] 対 音圧 [dB] のスペクトラム。直近の PCM サンプルに窓を掛けて
+    # rFFT し、大きさを dB (20*log10) にして周波数軸に沿った縦棒で描く。
+    _SPEC_FFT = 1024       # FFT長(2^n)。分解能 = fs/この値
+    _SPEC_DB_FLOOR = -20.0  # 表示下限 [dB]
+    _SPEC_DB_CEIL = 80.0    # 表示上限 [dB]
+
+    def _draw_spectrum(self, canvas: tk.Canvas, samples: list[int],
+                       sample_rate: int) -> None:
+        canvas.delete("wave")
+        n = self._SPEC_FFT
+        if len(samples) < n:
+            return
+        width = canvas.winfo_width() or int(canvas.cget("width"))
+        height = canvas.winfo_height() or int(canvas.cget("height"))
+        pad_l, pad_b, pad_t = 44, 18, 8  # 軸ラベルの余白
+
+        x = np.asarray(samples[-n:], dtype=np.float64)
+        x -= x.mean()
+        window = np.hanning(n)
+        spec = np.abs(np.fft.rfft(x * window))
+        # 振幅を dB に(窓のゲインで正規化、0除算回避に微小値を足す)
+        db = 20.0 * np.log10(spec / (n * 0.25) + 1e-6)
+        freqs = np.fft.rfftfreq(n, d=1.0 / sample_rate)  # 0 .. fs/2
+
+        plot_w = width - pad_l - 6
+        plot_h = height - pad_b - pad_t
+        fmax = sample_rate / 2.0
+        db_floor, db_ceil = self._SPEC_DB_FLOOR, self._SPEC_DB_CEIL
+
+        def sx(f: float) -> float:
+            return pad_l + (f / fmax) * plot_w
+
+        def sy(d: float) -> float:
+            d = max(db_floor, min(db_ceil, d))
+            return pad_t + (1.0 - (d - db_floor) / (db_ceil - db_floor)) * plot_h
+
+        # 周波数グリッド(2kHz刻み)と Hz ラベル
+        step_hz = 2000
+        f = 0
+        while f <= fmax + 1:
+            gx = sx(f)
+            canvas.create_line(gx, pad_t, gx, pad_t + plot_h,
+                               fill="gray25", tags="wave")
+            canvas.create_text(gx, height - pad_b + 9, text=f"{f // 1000}k",
+                               fill="gray55", font=("", 7), tags="wave")
+            f += step_hz
+        # dB グリッド(20dB刻み)と dB ラベル
+        d = db_floor
+        while d <= db_ceil + 1:
+            gy = sy(d)
+            canvas.create_line(pad_l, gy, pad_l + plot_w, gy,
+                               fill="gray20", tags="wave")
+            canvas.create_text(pad_l - 6, gy, text=f"{int(d)}", anchor="e",
+                               fill="gray55", font=("", 7), tags="wave")
+            d += 20.0
+
+        # スペクトラム本体(塗りつぶしの縦棒風ポリライン)
+        base_y = pad_t + plot_h
+        pts = [pad_l, base_y]
+        for fr, dv in zip(freqs, db):
+            pts.extend((sx(fr), sy(dv)))
+        pts.extend((pad_l + plot_w, base_y))
+        canvas.create_polygon(*pts, fill="#0a3d1a", outline="", tags="wave")
+        line_pts = []
+        for fr, dv in zip(freqs, db):
+            line_pts.extend((sx(fr), sy(dv)))
+        canvas.create_line(*line_pts, fill="spring green", tags="wave")
 
     @staticmethod
     def _draw_polyline(canvas: tk.Canvas, samples: list[int], full_scale: float) -> None:

@@ -64,7 +64,6 @@ constexpr uint32_t kLightPeriodMs = CFG_TLM_LIGHT_PERIOD_MS;
 constexpr uint32_t kTofPeriodMs = CFG_TLM_TOF_PERIOD_MS;
 constexpr uint32_t kMcuPeriodMs = CFG_TLM_MCU_PERIOD_MS;
 constexpr uint32_t kBlePeriodMs = CFG_TLM_BLE_PERIOD_MS;
-constexpr uint32_t kBleFragPeriodMs = CFG_TLM_BLE_FRAG_PERIOD_MS;
 
 uint8_t audioFrame[1024 + FRAME_OVERHEAD]; /* PCM streaming TX buffer */
 
@@ -164,7 +163,6 @@ void Service::init()
   nextTofTick_ = now;
   nextMcuTick_ = now;
   nextBleTick_ = now + 500U;
-  nextBleFragTick_ = now + 700U; /* offset from nextBleTick_ so both don't fire on the same poll() */
   loopWindowStart_ = now;
   loopCount_ = 0;
   printf("[TLM] streaming: UART/TCP %luHz (165B frames v2), BLE %luHz (all sensors)\r\n",
@@ -944,17 +942,6 @@ void Service::poll()
     }
   }
 
-  /* Full-sensor BLE fragment transfer: independent, slower cadence (1 Hz)
-   * than SendStatus's MiniStatus (10 Hz). Shares the same notify link/UART4,
-   * so it is gated the same way - skipped during a recording transfer. */
-  if (telemetryEnabled && static_cast<int32_t>(now - nextBleFragTick_) >= 0)
-  {
-    nextBleFragTick_ += kBleFragPeriodMs;
-    if (!comm_ble::IsRecTxActive())
-    {
-      comm_ble::SendStatusFrag(status_);
-    }
-  }
   if (telemetryEnabled)
   {
     /* Skip the TCP service while the NS app is idle. pollTcp()'s 1 Hz
