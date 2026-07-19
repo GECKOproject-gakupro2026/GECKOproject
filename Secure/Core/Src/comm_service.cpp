@@ -948,18 +948,23 @@ void Service::poll()
     }
   }
 
-  /* TCPの accept 待ち受け(pollTcp())は IDLE 状態のときだけ行う。deviceState==0
-   * (IDLE)以外、つまり何らかの通信/録音で ACTIVE な間は一切呼ばない: pollTcp()
-   * のノークライアント時 MX_WIFI_Socket_accept() は毎回 ~300ms ブロックしうる
-   * ため、間隔を伸ばすだけでは ACTIVE 中の poll() ループ周期を圧迫し続ける
-   * (BLE録音の連続ストリーミング転送では、これが SendRecInfo() の呼び出し
-   * 頻度を落とし、AT往復(実測約35〜40ms/チャンク@230400baud)に対して録音生成
-   * (29.5ms/ブロック@16kHz)が追いつけずリングバッファが溢れる原因になっていた)。
-   * UART/TCPの通常テレメトリ送信(sendUart/sendTcp、上のcollect()ブロック)自体
-   * は deviceState を見ず telemetryEnabled のみで動く(ユーザー方針: UARTは
-   * 動いていて良い)。IDLE中は何もサーブする通信が無いので、TCP accept だけは
-   * 引き続き5秒間隔でポーリングし、新規TCPクライアントの接続を受け付ける。 */
-  if (telemetryEnabled && deviceState == 0U)
+  /* pollTcp() を呼ぶ条件:
+   *   - 既にTCPクライアントが接続中(comm_wifi::HasClient()): 常に呼ぶ。この
+   *     場合 PollRecv() 内の重い accept はスキップされ recv だけ走るので軽い。
+   *     ACTIVE中でも接続クライアントからのコマンド('a'/'s'で音声ストリーム
+   *     ON/OFF等)と受信データを処理し続けるために必須。
+   *   - 未接続 かつ IDLE(deviceState==0): 新規接続を受け付けるため呼ぶ。
+   *   - 未接続 かつ ACTIVE: 呼ばない。ノークライアント時の accept は毎回
+   *     ~300ms ブロックしうるので、ACTIVE中(特にBLE録音の連続ストリーミング
+   *     転送中)に呼ぶと poll() ループ周期を圧迫し、SendRecInfo() の呼び出し
+   *     頻度が落ちてリングバッファが溢れる。
+   * 以前はここが deviceState==0 のみのガードで、TCP接続後にボードがACTIVEに
+   * なると pollTcp() 自体が呼ばれなくなり、接続済みクライアントからの受信
+   * (音声ストリーム開始コマンド含む)が一切処理されないバグがあった。
+   * UART/TCPの通常テレメトリ送信(sendUart/sendTcp、上のcollect()ブロック)は
+   * deviceState を見ず telemetryEnabled のみで動く(ユーザー方針: UARTは
+   * 動いていて良い)。 */
+  if (telemetryEnabled && (comm_wifi::HasClient() || deviceState == 0U))
   {
     /* Skip the TCP service while the NS app is idle. pollTcp()'s 1 Hz
      * MX_WIFI_Socket_accept() blocks for hundreds of ms with no client, and
