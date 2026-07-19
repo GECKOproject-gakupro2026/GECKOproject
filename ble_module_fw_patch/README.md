@@ -78,3 +78,12 @@ STM32CubeWB v1.18.0 の `Projects/P-NUCLEO-WB55.Nucleo/Applications/BLE/BLE_AT_S
      `Secure/Core/Src/comm_ble.cpp`の`bleAtBuffer`を160→**560**、`kRecChunkPayload`を58→**240**。
    これらのドライバファイル(`stm32wb_at.c/.h`, `stm32wb_at_ble.h`)はU585/WB5MMGで共通なので、
    U585側で編集したものをWBビルドツリーにコピーする(手順3と同じ運用)。
+   - **【重要・当初見落とした真犯人】`ble_at_server_cb.c`の`global_notif_val_tab[64]`/
+     `global_indic_val_tab[64]`も64→248に拡大する**。WBは受信したnotify値を
+     `memcpy(global_notif_val_tab, param.val_tab, sizeof(global_notif_val_tab))`で
+     この配列へコピーしてからGATT notifyを送るため、ここが64のままだと**240Bのうち先頭64B
+     しか転送されず、残り176Bは前回の古いデータのまま**送られて音声が壊れる(DC発散)。
+     `app_ble.c`の`extern uint8_t global_notif_val_tab[64]`宣言も248に合わせる。
+     このファイルは上記手順3のコピー対象一覧に無かったため見落としやすい。
+     `ble_module_fw_patch/ble_at_server_cb.c` に修正版を追加済み(手順3で同名ファイルを
+     `Core/Src/ble_at_server_cb.c` に上書きする)。
