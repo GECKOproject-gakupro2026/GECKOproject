@@ -52,6 +52,7 @@ extern "C" void BootGuard_ConfirmBoot(void); /* boot_guard.cpp, OTA Phase 2 */
 /* Shared BSP audio DMA event flags (defined in audio_capture.cpp) */
 extern "C" volatile uint32_t g_AudioEvents;
 extern "C" volatile uint32_t g_AudioErrors;
+extern "C" volatile uint32_t g_AudioDmaOverruns;
 
 namespace telemetry
 {
@@ -910,6 +911,10 @@ void Service::poll()
   if (recCmd == 1U)
   {
     audioStream_ = false;
+    /* 録音開始直前に溜まっていた古いDMA半バッファ(録音とは無関係の過去の音)を
+     * 捨て、取りこぼしカウンタもリセットして、録音中だけの状態を正確に見る。 */
+    g_AudioEvents = 0;
+    g_AudioDmaOverruns = 0;
     recorder::Start();
     comm_ble::SendRecInfo_Arm();
   }
@@ -1008,6 +1013,18 @@ void Service::poll()
       }
     }
     printf("\r\n");
+
+    /* 録音中に DMA half/full 取りこぼし(g_AudioDmaOverruns)またはハード
+     * エラー(g_AudioErrors)が起きた時だけ警告を出す。overruns!=0 は poll() が
+     * DMAペース(64ms/半)に追いつけず音声を落としている証拠で、録音の時間軸
+     * ズレ/末尾無音の直接原因になる。正常時は無音(ログを汚さない)。 */
+    if (recorder::Active() && (g_AudioDmaOverruns != 0U || g_AudioErrors != 0U))
+    {
+      printf("[REC] WARN blocks=%lu overruns=%lu dma_err=%lu\r\n",
+             (unsigned long)recorder::TotalBlocks(),
+             (unsigned long)g_AudioDmaOverruns,
+             (unsigned long)g_AudioErrors);
+    }
   }
 
   /* PCM streaming: feed each ready buffer half into the pitch-correction
@@ -1033,11 +1050,27 @@ void Service::poll()
     if (events != 0U)
     {
       g_AudioEvents = 0;
+      /* events は bit0=half/bit1=full の independent なフラグ(OR蓄積)。
+       * poll() の呼び出し間隔が空くと(BLE notifyのAT往復やTCP accept等で
+       * ブロックされた場合)、次に読んだ時点で両方立っていることがある。
+       * 以前は "(events&1)!=0 なら前半、そうでなければ後半" という片方だけ
+       * 処理する実装になっており、half+full 両方立った場合に後半(full側)を
+       * 無条件に握りつぶしていた - 録音の生成が実時間より遅れ、その分が
+       * 無音として録音末尾に押し出される音飛びの原因だった。ここは両方を
+       * 独立してチェックし、両方立っていれば両方 FeedForResample する。 */
       const int16_t *buf = audio_capture::Buffer();
-      const int16_t *half =
-          (events & 1U) != 0U ? &buf[0] : &buf[audio_capture::Samples() / 2];
-      audio_capture::FeedForResample(half, 512U);
-      audio_capture::FeedForResample(half + 512, 512U);
+      const int16_t *firstHalf = &buf[0];
+      const int16_t *secondHalf = &buf[audio_capture::Samples() / 2];
+      if ((events & 1U) != 0U)
+      {
+        audio_capture::FeedForResample(firstHalf, 512U);
+        audio_capture::FeedForResample(firstHalf + 512, 512U);
+      }
+      if ((events & 2U) != 0U)
+      {
+        audio_capture::FeedForResample(secondHalf, 512U);
+        audio_capture::FeedForResample(secondHalf + 512, 512U);
+      }
     }
     while (audio_capture::ResampledAvailable() >= 512U)
     {

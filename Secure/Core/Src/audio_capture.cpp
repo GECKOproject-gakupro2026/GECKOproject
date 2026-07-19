@@ -227,18 +227,31 @@ extern "C" const int16_t *Telemetry_GetAudioBuffer(uint32_t *count)
  * 【重要】volatile を落とさないこと。 */
 extern "C" volatile uint32_t g_AudioEvents = 0; /* bit0 = half, bit1 = full */
 extern "C" volatile uint32_t g_AudioErrors = 0;
+/* DMA half/full 取りこぼし検出: コールバックが立てようとしたビットが既に
+ * 立っていた(=前回のフラグをまだ poll() が処理していない)回数。0以外なら
+ * poll() の呼び出しが DMA ペース(64ms/半)に追いつけておらず、その半バッファ
+ * 分の音声が失われている(録音のズレ/末尾無音の直接原因)。 */
+extern "C" volatile uint32_t g_AudioDmaOverruns = 0;
 
 /* BSPオーディオのDMAコールバック。telemetry.cpp から移動。
  * 【重要】プロジェクト内で1箇所にしか定義してはいけない。 */
 extern "C" void BSP_AUDIO_IN_HalfTransfer_CallBack(uint32_t Instance)
 {
   (void)Instance;
+  if ((g_AudioEvents & 1U) != 0U)
+  {
+    g_AudioDmaOverruns++; /* 前回の half をまだ処理していないのに次が来た */
+  }
   g_AudioEvents |= 1U;
 }
 
 extern "C" void BSP_AUDIO_IN_TransferComplete_CallBack(uint32_t Instance)
 {
   (void)Instance;
+  if ((g_AudioEvents & 2U) != 0U)
+  {
+    g_AudioDmaOverruns++; /* 前回の full をまだ処理していないのに次が来た */
+  }
   g_AudioEvents |= 2U;
 }
 
