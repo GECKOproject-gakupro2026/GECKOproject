@@ -48,26 +48,18 @@ void FeedPcm(const int16_t *pcm, size_t count)
     return;
   }
 
-  /* BLE録音は 16 kHz → 8 kHz に 2:1 デシメート(隣接2サンプル平均で簡易ローパス)
-   * してから ADPCM 圧縮する。8 kHz でも音声は十分聞き取れ、転送量が半分になる。
-   * PC側は 8 kHz で WAV を書く(protocol.REC_SAMPLE_RATE)。count は常に 512
-   * (偶数)。
+  /* BLE録音は 16 kHz フルレート(デシメーションなし)で ADPCM 圧縮する。音質を
+   * 下げずに録りたいという要求のため。240B notify ペイロードでチャンク数を大きく
+   * 減らしたので、16 kHz でも 3 秒あたり約104チャンク(旧 8kHz/58B 時の219より
+   * ずっと少ない)。PC側は 16 kHz で WAV を書く(protocol.REC_SAMPLE_RATE)。
+   * count は常に 512(偶数)。
    *
-   * 各 FeedPcm を1つの自己完結 ADPCM ブロック(先頭にヘッダ)として書く。
-   * 連続ストリーム(ヘッダ1回)方式は、ファームのエンコーダと PC のデコーダの
-   * 微小な状態差が延々と蓄積して predictor が DC 発散する不具合があったため、
-   * 各ブロックがヘッダから状態を復元し直す自己完結方式に戻した(これは以前
-   * 音声が正しく録れていた構成)。 */
-  static int16_t decim[256];
-  size_t outCount = count / 2U;
-  for (size_t i = 0; i < outCount; ++i)
-  {
-    int32_t avg = (static_cast<int32_t>(pcm[2U * i]) +
-                   static_cast<int32_t>(pcm[2U * i + 1U])) / 2;
-    decim[i] = static_cast<int16_t>(avg);
-  }
-
-  size_t need = ADPCM_BLOCK_HEADER_SIZE + (outCount + 1U) / 2U;
+   * 各 FeedPcm を1つの自己完結 ADPCM ブロック(先頭にヘッダ)として書く。連続
+   * ストリーム(ヘッダ1回)方式は、ファームのエンコーダと PC のデコーダの微小な
+   * 状態差が延々と蓄積して predictor が DC 発散する不具合があったため、各ブロックが
+   * ヘッダから状態を復元し直す自己完結方式にしている(以前音声が正しく録れていた
+   * 構成)。 */
+  size_t need = ADPCM_BLOCK_HEADER_SIZE + (count + 1U) / 2U;
   if (s_writePos + need > kBufBytes)
   {
     s_active = false;
@@ -77,9 +69,9 @@ void FeedPcm(const int16_t *pcm, size_t count)
     return;
   }
 
-  size_t written = adpcm_encode(&s_state, decim, outCount, &s_buf[s_writePos]);
+  size_t written = adpcm_encode(&s_state, pcm, count, &s_buf[s_writePos]);
   s_writePos += static_cast<uint32_t>(written);
-  s_totalSamples += static_cast<uint32_t>(outCount);
+  s_totalSamples += static_cast<uint32_t>(count);
 }
 
 uint32_t UsedBytes() { return s_writePos; }

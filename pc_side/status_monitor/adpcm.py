@@ -71,15 +71,15 @@ def decode_block(block: bytes) -> list[int]:
 
 
 # The board (Secure/Core/Src/recorder.cpp) encodes one self-contained ADPCM
-# block per FeedPcm() call. BLE recordings are decimated to 8 kHz, so each
-# FeedPcm gets 256 samples -> a 4 + 256/2 = 132-byte block; the trailing block
+# block per FeedPcm() call. BLE recordings are 16 kHz (no decimation), so each
+# FeedPcm gets 512 samples -> a 4 + 512/2 = 260-byte block; the trailing block
 # may be shorter. Over BLE the byte stream is sliced into fixed REC_CHUNKs that
 # do NOT align to these blocks; concatenating chunks in seq order reproduces the
 # exact block stream, which this walks. Each block re-seeds the predictor from
 # its own header, so a tiny encoder/decoder drift can't accumulate (the
 # continuous single-header variant diverged to a DC runaway - reverted).
-BLOCK_SAMPLES = 256  # BLE recording (8 kHz decimated)
-BLOCK_SIZE = BLOCK_HEADER_SIZE + BLOCK_SAMPLES // 2  # 132
+BLOCK_SAMPLES = 512  # BLE recording (16 kHz full-rate)
+BLOCK_SIZE = BLOCK_HEADER_SIZE + BLOCK_SAMPLES // 2  # 260
 
 
 def decode_stream(data: bytes, block_samples: int = BLOCK_SAMPLES) -> list[int]:

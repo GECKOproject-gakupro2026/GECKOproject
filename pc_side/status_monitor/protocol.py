@@ -82,9 +82,9 @@ MINI_FMT_V2 = "<BhHHHH3h3h3hhhHhBB"
 MINI_SIZE_V2 = struct.calcsize(MINI_FMT_V2)  # 39 (v2: all sensors)
 
 AUDIO_SAMPLE_RATE = 16000
-# BLE録音は転送量削減のため board 側で 16 kHz -> 8 kHz に 2:1 デシメートしている
-# (recorder.cpp の FeedPcm)。8 kHz でも音声は十分聞き取れる。WAV は 8 kHz で書く。
-REC_SAMPLE_RATE = 8000
+# BLE録音は 16 kHz フルレート(デシメーションなし、recorder.cpp の FeedPcm)。
+# 240B notify ペイロードでチャンク数を抑えているので 16 kHz でも十分速い。
+REC_SAMPLE_RATE = 16000
 
 
 def decode_audio(payload: bytes) -> list[int]:
