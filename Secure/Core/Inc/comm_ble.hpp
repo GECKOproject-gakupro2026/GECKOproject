@@ -38,25 +38,20 @@ uint8_t TakeRecCmd();
  * nsActivity相当。呼ぶと内部状態はfalseにクリアされる。 */
 bool TakeHostActivity();
 
-/* 録音停止(REC_STOP)を受けて「REC_INFO を返す準備」を立てる。Service::poll()が
- * recorder::Stop() 直後に呼ぶ。 */
+/* 録音開始(REC_START)を受けて連続ストリーミング転送状態に入る。Service::poll()が
+ * recorder::Start() 直後に呼ぶ。緑LEDを点灯し、以後 SendRecInfo() が
+ * recorder のリングから逐次ブロックを取り出して送り続ける。 */
 void SendRecInfo_Arm();
 
-/* 録音停止(REC_STOP)直後に、録音の総サンプル数と総チャンク数を FRAME_CMD_REC_INFO
- * でPCへ返す。PCはこれを見て REC_GET で1チャンクずつ取りに来る(ストップ&ウェイト)。
- * BLE notify は取りこぼしうるので、自動プッシュではなくPC主導のポーリングにして
- * 確実性を担保する。 */
+/* 毎 poll 呼ぶ: ペーシングしつつ recorder::PopBlock() で1ブロックずつ取り出し
+ * FRAME_CMD_REC_CHUNK として送る。録音中も録音停止後(残り送信中)も動く。
+ * 全部送り切ったら FRAME_CMD_REC_END(総サンプル数・総ブロック数)を1回返して
+ * ストリーミングを終え、緑LEDを消灯する。 */
 void SendRecInfo();
 
-/* PC からの録音チャンク取得要求(FRAME_CMD_REC_GET)を1件処理する。GATT write
- * コールバックが要求 seq をキューに積み、この関数を Service::poll() から毎回
- * 呼んでキューから1件取り出し、その seq の REC_CHUNK を1つ返す(割り込み文脈で
- * UART送信しないための分離)。キューが空なら何もしない。 */
-void ServeRecGet();
-
-/* 録音転送(REC_INFO 未応答 or REC_GET キューにデータあり)が進行中か。
+/* 録音ストリーミング転送(録音中または残ブロック送信中)が進行中か。
  * Service::poll() がこれを見て SendStatus(センサーテレメトリ)を一時停止し、
- * 録音転送に notify リンクを譲る。 */
+ * 録音送信中は音声データ以外のBLE通信を行わないようにする。 */
 bool IsRecTxActive();
 
 } // namespace comm_ble

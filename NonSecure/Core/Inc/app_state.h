@@ -30,14 +30,22 @@
 extern "C" {
 #endif
 
-/* デバイス状態。ACTIVEはACQUIRE/COMMのサブ状態を持つが、外から見える主状態は
- * IDLE / ACTIVE の2つ。不明値は AppState_Tick 内の default で IDLE に落ちる。 */
+/* デバイス状態。ACTIVEはACQUIRE/COMM/BLE_RECのサブ状態を持つが、外から見える
+ * 主状態は IDLE / ACTIVE の2つ。不明値は AppState_Tick 内の default で IDLE
+ * に落ちる。 */
 typedef enum
 {
   STATE_IDLE          = 0, /* 待機: 赤LED遅点滅・ToF SLEEP・センサー取得/送信
                                なし(照度/音圧は例外)・IDLE_BEACONのみ低頻度送信 */
   STATE_ACTIVE_ACQUIRE = 1, /* 稼働(取得): 次フレーム用にセンサーを読む */
   STATE_ACTIVE_COMM    = 2, /* 稼働(通信): テレメトリを送る */
+  STATE_ACTIVE_BLE_REC  = 3, /* 稼働(BLE音声送信): Secure側(comm_ble.cpp)が
+                                REC_START〜REC_ENDの間、緑LED(GPIOH PIN_7)を
+                                専有点灯させる。物理LEDはSecure/NonSecureで
+                                共有(board_io.cのLED_GREEN_PINと同一ピン)なので、
+                                この状態ではACTIVEの緑LEDハートビートトグルを
+                                止める(それ以外のACQUIRE/COMMサイクル-センサー
+                                取得・UART/TCPテレメトリ送信-は通常通り続ける)。 */
 } AppState_t;
 
 /* 状態機械のコンテキスト(App_Run が1つ保持し、毎周 AppState_Tick に渡す)。
@@ -59,8 +67,9 @@ typedef struct
 void AppState_Init(AppStateCtx_t *ctx, uint32_t now_ms);
 
 /* 状態機械を1周進める。now_ms は現在時刻、linkStatus は Comm_GetLinkStatus()
- * のビット(bit2=BLE接続中, bit3=TCPクライアント)。内部で Trigger_Poll /
- * sensor_store(Acquire/GetForSend) / Comm_SendTelemetry / LED / ToF を叩く。 */
+ * のビット(bit2=BLE接続中, bit3=TCPクライアント, bit4=BLE録音送信中)。内部で
+ * Trigger_Poll / sensor_store(Acquire/GetForSend) / Comm_SendTelemetry /
+ * LED / ToF を叩く。 */
 void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus);
 
 #ifdef __cplusplus

@@ -50,9 +50,11 @@ extern "C" {
 #define FRAME_CMD_SET_SENSOR_RATE 0x15U /* PC->board: [sensor_id u8][period_ms u16 LE] */
 /* 0x16 was FRAME_CMD_STATUS_FRAG (BLE full-sensor fragment). Retired - the
  * "BLE全データ" tab was removed; do not reuse this ID to avoid confusion. */
-#define FRAME_CMD_REC_RESEND   0x17U   /* PC->board: [seq u16 LE], resend one lost REC_CHUNK */
-#define FRAME_CMD_REC_GET      0x18U   /* PC->board: [seq u16 LE], poll one REC_CHUNK (stop&wait) */
-#define FRAME_CMD_REC_INFO     0x19U   /* board->PC: [total_samples u32][total_chunks u16], reply to REC_STOP */
+/* 0x17-0x19 were FRAME_CMD_REC_RESEND/REC_GET/REC_INFO (stop&wait chunk-poll
+ * recording transfer). Retired in favor of continuous streaming (REC_START
+ * arms SendRecInfo_Arm() immediately; blocks stream out via REC_CHUNK as
+ * they're encoded; REC_END carries the final totals) - do not reuse these
+ * IDs to avoid confusion. */
 #define FRAME_CMD_ACK          0x7EU   /* {orig_cmd, orig_seq, u32 arg}      */
 #define FRAME_CMD_NACK         0x7FU   /* {orig_cmd, orig_seq, u8 error}     */
 

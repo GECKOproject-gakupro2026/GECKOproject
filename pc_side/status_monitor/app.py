@@ -108,10 +108,7 @@ class StatusMonitorApp:
         self.recording = False
         self.record_samples: list[int] = []
         self.ble_rec_chunks: dict[int, bytes] = {}
-        # BLE録音のポーリング取得(CMD_REC_GET/REC_INFO)用の進行状態
-        self.ble_rec_total_samples = 0
-        self.ble_rec_total_chunks = 0
-        self.ble_rec_get_round = 0
+        self.ble_rec_ended = False  # REC_END を受けたら True (二重処理防止)
         self.last_wav: pathlib.Path | None = None
 
         # Step D2: non-volatile state log (fetched page-by-page via LOG_REQ).
@@ -708,16 +705,20 @@ class StatusMonitorApp:
         self._log(f"録音保存: {path.name} ({secs:.1f}秒, {len(samples)}サンプル)")
 
     def _toggle_record_ble(self) -> None:
-        # BLE can't stream PCM in real time (64 B notify / low baud), so
-        # instead the board records into its own SRAM ring (ADPCM-compressed)
-        # while REC_START..REC_STOP is active, then streams the whole thing
-        # back as REC_CHUNK/REC_END once stopped (see comm_ble.cpp's
-        # PumpRecTx / recorder.cpp on the firmware side).
+        # The board streams continuously: while REC_START..REC_STOP is
+        # active it records and BLE-notifies each self-contained ADPCM
+        # block (REC_CHUNK) as soon as it's encoded, draining its small
+        # ring buffer as it goes (see recorder.cpp / comm_ble.cpp's
+        # SendRecInfo). After REC_STOP it keeps streaming until the ring is
+        # empty, then sends one REC_END with the final totals. This has no
+        # RAM ceiling on recording length (unlike the old stop&wait/whole-
+        # buffer approach), so multi-minute recordings work.
         if self.transport is None:
             return
         if not self.recording:
             self.recording = True
             self.ble_rec_chunks = {}
+            self.ble_rec_ended = False
             self.record_btn.configure(text="録音停止")
             self.transport.write(protocol.build_frame(protocol.CMD_REC_START, 0))
             self._log("BLE録音開始")
@@ -725,70 +726,41 @@ class StatusMonitorApp:
         self.recording = False
         self.record_btn.configure(text="録音開始")
         self.transport.write(protocol.build_frame(protocol.CMD_REC_STOP, 0))
-        self._log("BLE録音停止、転送待ち...")
+        self._log("BLE録音停止、残りのチャンク転送待ち...")
 
     def _on_ble_rec_chunk(self, seq: int, payload: bytes) -> None:
         self.ble_rec_chunks[seq] = payload
 
-    # BLE録音転送はストップ&ウェイトのポーリング方式(comm_ble.cpp参照)。
-    #   REC_INFO: [cmd u8][total_samples u32 LE][total_chunks u16 LE]  (board->PC)
-    #   REC_GET:  [seq u16 LE]  (PC->board, frame_codec)   -> 該当 REC_CHUNK 1個
-    #   REC_CHUNK:[cmd u8][seq u16 LE][adpcm payload]       (board->PC, raw TLV)
-    # BLE notify は Write-Without-Response 相当で取りこぼしうるので、自動プッシュ
-    # ではなく PC が未取得 seq を要求し続けて確実に全チャンクを回収する。
-    _REC_GET_WINDOW = 6      # 一度に投げる REC_GET 要求数(パイプライン窓)
-    _REC_GET_POLL_MS = 250   # 窓を投げてから未達を再チェックするまでの待ち
-
+    # BLE録音転送は連続ストリーミング方式(comm_ble.cpp参照)。
+    #   REC_CHUNK:[cmd u8][seq u16 LE][adpcm block, self-contained] (board->PC, raw TLV)
+    #   REC_END:  [cmd u8][total_samples u32 LE][total_blocks u16 LE] (board->PC, raw TLV)
+    # REC_CHUNKは録音しながら逐次届き、REC_ENDは最後のブロックを送り切った後に
+    # 一度だけ届く。BLE notifyは取りこぼしうるので、REC_END到着時に欠けている
+    # seqがあれば「欠落あり」として記録するのみ(送信済みブロックはボード側の
+    # リングから既に解放されているため再取得はできない)。
     def _handle_ble_rec_notify(self, payload: bytes) -> None:
         cmd = payload[0]
         if cmd == protocol.CMD_REC_CHUNK and len(payload) > 3:
             seq = payload[1] | (payload[2] << 8)
             self._on_ble_rec_chunk(seq, payload[3:])
-        elif cmd == protocol.CMD_REC_INFO and len(payload) >= 7:
+        elif cmd == protocol.CMD_REC_END and len(payload) >= 7:
             total_samples = struct.unpack_from("<I", payload, 1)[0]
-            total_chunks = struct.unpack_from("<H", payload, 5)[0]
-            self._on_ble_rec_info(total_samples, total_chunks)
+            total_blocks = struct.unpack_from("<H", payload, 5)[0]
+            self._on_ble_rec_end(total_samples, total_blocks)
 
-    def _on_ble_rec_info(self, total_samples: int, total_chunks: int) -> None:
-        self.ble_rec_total_samples = total_samples
-        self.ble_rec_total_chunks = total_chunks
-        self.ble_rec_get_round = 0
-        self._log(f"BLE録音: 転送開始 {total_chunks}チャンク "
-                  f"({total_samples}サンプル)")
-        self._pump_rec_get()
-
-    def _pump_rec_get(self) -> None:
-        # 未取得 seq を先頭から窓ぶんだけ REC_GET で要求し、少し待って再チェック。
-        # 取りこぼした seq は次のラウンドでまた要求されるので、確実に埋まる。
-        if self.transport is None:
+    def _on_ble_rec_end(self, total_samples: int, total_blocks: int) -> None:
+        if getattr(self, "ble_rec_ended", False):
             return
-        missing = [s for s in range(self.ble_rec_total_chunks)
-                   if s not in self.ble_rec_chunks]
-        if not missing:
-            self._finish_ble_rec()
-            return
-        # 進捗が全く無い状態が長く続いたら諦めきれるよう上限ラウンドを設ける
-        if self.ble_rec_get_round > self.ble_rec_total_chunks + 200:
-            self._log(f"BLE録音: {len(missing)}チャンク取得できず(欠落のまま保存)")
-            self._finish_ble_rec()
-            return
-        self.ble_rec_get_round += 1
-        for seq in missing[:self._REC_GET_WINDOW]:
-            self.transport.write(protocol.build_frame(protocol.CMD_REC_GET, 0,
-                                                      struct.pack("<H", seq)))
-        self.root.after(self._REC_GET_POLL_MS, self._pump_rec_get)
-
-    def _finish_ble_rec(self) -> None:
-        # Concatenate chunks in seq order to rebuild the exact block stream,
-        # then decode continuously (adpcm.decode_stream).
+        self.ble_rec_ended = True
+        got = len(self.ble_rec_chunks)
+        missing = total_blocks - got
+        self._log(f"BLE録音: 転送完了 {got}/{total_blocks}ブロック"
+                  f"{f' ({missing}個欠落)' if missing > 0 else ''}")
         stream = b"".join(self.ble_rec_chunks[seq]
                           for seq in sorted(self.ble_rec_chunks))
         samples = adpcm.decode_stream(stream)
-        got = len(self.ble_rec_chunks)
         self.ble_rec_chunks = {}
-        total_samples = getattr(self, "ble_rec_total_samples", 0)
-        self._log(f"BLE録音: {got}/{self.ble_rec_total_chunks}チャンク取得完了")
-        if total_samples and len(samples) != total_samples:
+        if total_samples and missing == 0 and len(samples) != total_samples:
             self._log(f"BLE録音: サンプル数不一致 got={len(samples)} expected={total_samples}")
         if not samples:
             self._log("BLE録音: データなし")
@@ -816,7 +788,7 @@ class StatusMonitorApp:
                     self._log(payload)
                     continue
                 if (self.link_var.get() == "BLE" and payload
-                        and payload[0] in (protocol.CMD_REC_CHUNK, protocol.CMD_REC_INFO)):
+                        and payload[0] in (protocol.CMD_REC_CHUNK, protocol.CMD_REC_END)):
                     self._handle_ble_rec_notify(payload)
                     continue
                 for item in self.parser.feed(payload):
@@ -889,7 +861,7 @@ class StatusMonitorApp:
         if self.tree.exists(key):
             self.tree.set(key, "value", value)
 
-    DEVICE_STATE_LABELS = {0: "IDLE", 1: "ACTIVE(取得)", 2: "ACTIVE(通信)"}
+    DEVICE_STATE_LABELS = {0: "IDLE", 1: "ACTIVE(取得)", 2: "ACTIVE(通信)", 3: "ACTIVE(BLE音声送信)"}
 
     def _apply(self, st: protocol.Status) -> None:
         self.button_canvas.itemconfigure(

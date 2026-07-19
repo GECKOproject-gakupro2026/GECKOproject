@@ -903,20 +903,21 @@ void Service::poll()
   /* Recording control: BLE write (fe41) frames are parsed into bleRecCmd by
    * comm_ble.cpp's GATT write callback; this is the only place that consumes
    * it. Starting a recording forces audioStream_ off so the two don't fight
-   * over the same resampled-audio pipeline (see poll()'s audio block). */
+   * over the same resampled-audio pipeline (see poll()'s audio block).
+   * REC_START の時点で SendRecInfo_Arm() を呼び、連続ストリーミング転送
+   * (録音しながら逐次 REC_CHUNK を送る)を開始する。 */
   uint8_t recCmd = comm_ble::TakeRecCmd();
   if (recCmd == 1U)
   {
     audioStream_ = false;
     recorder::Start();
+    comm_ble::SendRecInfo_Arm();
   }
   else if (recCmd == 2U)
   {
-    recorder::Stop();
-    comm_ble::SendRecInfo_Arm(); /* REC_INFO を返す準備。PC が REC_GET で取りに来る */
+    recorder::Stop(); /* 残りのブロックは SendRecInfo() が送り切ってから REC_END を返す */
   }
-  comm_ble::SendRecInfo();  /* 停止直後に総数を1回返す */
-  comm_ble::ServeRecGet();  /* PC の REC_GET 要求に1件応答(ストップ&ウェイト) */
+  comm_ble::SendRecInfo();
 
   if (telemetryEnabled && static_cast<int32_t>(now - nextBleTick_) >= 0)
   {
@@ -942,7 +943,18 @@ void Service::poll()
     }
   }
 
-  if (telemetryEnabled)
+  /* TCPの accept 待ち受け(pollTcp())は IDLE 状態のときだけ行う。deviceState==0
+   * (IDLE)以外、つまり何らかの通信/録音で ACTIVE な間は一切呼ばない: pollTcp()
+   * のノークライアント時 MX_WIFI_Socket_accept() は毎回 ~300ms ブロックしうる
+   * ため、間隔を伸ばすだけでは ACTIVE 中の poll() ループ周期を圧迫し続ける
+   * (BLE録音の連続ストリーミング転送では、これが SendRecInfo() の呼び出し
+   * 頻度を落とし、AT往復(実測約35〜40ms/チャンク@230400baud)に対して録音生成
+   * (29.5ms/ブロック@16kHz)が追いつけずリングバッファが溢れる原因になっていた)。
+   * UART/TCPの通常テレメトリ送信(sendUart/sendTcp、上のcollect()ブロック)自体
+   * は deviceState を見ず telemetryEnabled のみで動く(ユーザー方針: UARTは
+   * 動いていて良い)。IDLE中は何もサーブする通信が無いので、TCP accept だけは
+   * 引き続き5秒間隔でポーリングし、新規TCPクライアントの接続を受け付ける。 */
+  if (telemetryEnabled && deviceState == 0U)
   {
     /* Skip the TCP service while the NS app is idle. pollTcp()'s 1 Hz
      * MX_WIFI_Socket_accept() blocks for hundreds of ms with no client, and
@@ -953,27 +965,7 @@ void Service::poll()
      * supposed to wake the board never gets drained: the board could enter
      * IDLE but never leave it. Idle means nothing to serve over TCP anyway;
      * the console/BLE wake paths stay live. */
-
-    /* Stretch the no-client TCP accept poll so its ~300 ms module-side block
-     * cannot stall whichever link is actually carrying data. Originally this
-     * only fired for an Active BLE/TCP link, which left a UART/VCP-only session
-     * exposed: with no BLE central and no TCP client, the accept ran every 5 s
-     * and its ~300 ms stall dropped the UART telemetry from 50 Hz toward
-     * ~10 Hz. Now the accept is stretched to 60 s whenever *any* of these hold:
-     *   - a BLE central or TCP client link is Active (original case), OR
-     *   - a UART/console session is Active (the 50 Hz telemetry case), OR
-     *   - Wi-Fi is not up (no IP): there is no point polling accept with no
-     *     network, and PollRecv already early-returns when the listen socket
-     *     is absent - this just avoids the interval bookkeeping.
-     * Only when Wi-Fi is up AND no link is active do we keep the brisk 5 s
-     * cadence, so a fresh TCP client still connects promptly. UART itself is
-     * never gated by this - it is DMA-driven and always drained at the top of
-     * poll(); this only decides how often the blocking accept is attempted. */
-    const bool otherLinkActive = (bleLink_.state == LinkState::Active) ||
-                                 (tcpLink_.state == LinkState::Active) ||
-                                 (uartLink_.state == LinkState::Active) ||
-                                 !comm_wifi::NetUp();
-    comm_wifi::SetAcceptInterval(otherLinkActive ? 60000U : 5000U);
+    comm_wifi::SetAcceptInterval(!comm_wifi::NetUp() ? 60000U : 5000U);
     uint32_t t0 = HAL_GetTick();
     pollTcp();
     profTcp += HAL_GetTick() - t0;
@@ -1131,11 +1123,12 @@ uint32_t GetDeviceState() { return deviceState; }
 extern "C" void CommBridge_SetDeviceState(uint32_t state)
 {
   using namespace telemetry;
-  /* AppState_t: 0=STATE_IDLE, 1=STATE_ACTIVE_ACQUIRE, 2=STATE_ACTIVE_COMM
-   * (NonSecure/Core/Inc/app_state.h - duplicated here as plain values since
-   * this boundary only ever carries a uint32_t, not the enum type). Log only
-   * the IDLE<->ACTIVE edge, not every ACQUIRE<->COMM sub-state flip within
-   * ACTIVE (that would flood the 64-entry SRAM ring for no diagnostic gain). */
+  /* AppState_t: 0=STATE_IDLE, 1=STATE_ACTIVE_ACQUIRE, 2=STATE_ACTIVE_COMM,
+   * 3=STATE_ACTIVE_BLE_REC (NonSecure/Core/Inc/app_state.h - duplicated here
+   * as plain values since this boundary only ever carries a uint32_t, not
+   * the enum type). Log only the IDLE<->ACTIVE edge, not every ACQUIRE<->
+   * COMM<->BLE_REC sub-state flip within ACTIVE (that would flood the
+   * 64-entry SRAM ring for no diagnostic gain). */
   bool wasIdle = (deviceState == 0U);
   bool isIdle = (state == 0U);
   if (wasIdle != isIdle)
@@ -1198,6 +1191,15 @@ extern "C" uint32_t CommBridge_GetLinkStatus(void)
   if (g_service != nullptr)
   {
     bits |= g_service->wifiTcpLinkBits();
+  }
+  if (comm_ble::IsRecTxActive())
+  {
+    /* bit4: BLE録音の連続ストリーミング転送中(録音中または残ブロック送信中)。
+     * NonSecure側のACTIVEハートビート(app_state.cのBoard_LedGreenToggle)は
+     * comm_ble.cppがREC_START〜REC_ENDの間占有する緑LED(GPIOH PIN_7、Secure
+     * BSPのLED_GREEN=board_io.cのLED_GREEN_PINと同一物理LED)を上書きしてしまう
+     * ため、NS側はこのビットを見てハートビートトグルを止める。 */
+    bits |= (1U << 4);
   }
   return bits;
 }

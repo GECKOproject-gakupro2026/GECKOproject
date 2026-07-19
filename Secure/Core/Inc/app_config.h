@@ -13,20 +13,31 @@
 
 /* ---- BLE module ----------------------------------------------------------
  * The custom AT-server firmware of the STM32WB5MMG (ble_module_fw_patch) runs
- * at 115200 baud. This MUST match hlpuart1.Init.BaudRate on the WB5MMG side;
- * a mismatch makes the AT link fail completely (BLE=NG).
+ * at CFG_BLE_BAUDRATE. This MUST match hlpuart1.Init.BaudRate on the WB5MMG
+ * side; a mismatch makes the AT link fail completely (BLE=NG).
  *
  * Real-hardware findings on this board's WB<->U585 wiring:
- *   - 115200 : rock solid (this value).
- *   - 460800 : links (BLE=OK) but the first AT after power-up sometimes
- *              garbles (ERROR/empty) before recovering.
+ *   - 115200 : rock solid.
+ *   - 230400 : this value - raised from 115200 because continuous-streaming
+ *              BLE recording (recorder.cpp) generates ADPCM blocks faster
+ *              than the AT-command round trip can notify them at 115200
+ *              (measured ~15.7 chunks/s at 115200 vs ~26.6/s at 230400, both
+ *              below the 33.9/s generation rate at 16 kHz - see recorder.hpp/
+ *              CFG_AUDIO_SAMPLE_RATE for the sample-rate side of this
+ *              trade-off). Still real-hardware verified stable: BLE=OK and
+ *              telemetry notifies flow normally.
+ *   - 460800 : does NOT work in practice despite reporting BLE=OK - ALL
+ *              notifies (telemetry included, not just recording) silently
+ *              stop arriving at the PC. Confirmed on real hardware
+ *              (2026-07-19): bleak received zero notifications over several
+ *              seconds of normal telemetry + REC_START. Do not use.
  *   - 921600 : does NOT link - every AT returns 0 bytes, BLE=NG, and the
  *              CFG_BLE_INIT_RETRIES bring-up retries below never recover it.
  *   - 1 Mbaud: never linked at all.
  * comm_ble::Init() retries the bring-up up to CFG_BLE_INIT_RETRIES times to
  * absorb a flaky first attempt; if it still fails, drop the baud on BOTH
  * sides and reflash. */
-#define CFG_BLE_BAUDRATE         115200U
+#define CFG_BLE_BAUDRATE         230400U
 #define CFG_BLE_INIT_RETRIES     3U     /* AT bring-up attempts before BLE=NG */
 #define CFG_BLE_REPLY_TIMEOUT_MS 1500U
 

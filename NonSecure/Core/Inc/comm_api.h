@@ -42,7 +42,8 @@ int Comm_PollHostCommand(uint8_t *out);
  * 0=止める、1=再開する。止めても受信は生きているのでウェイクできる。 */
 void Comm_SetTelemetryEnabled(uint32_t on);
 
-/* 接続状態のビット: bit0=BLE生存, bit1=Wi-Fi接続済, bit2=BLE接続中, bit3=TCPクライアント接続中 */
+/* 接続状態のビット: bit0=BLE生存, bit1=Wi-Fi接続済, bit2=BLE接続中,
+ * bit3=TCPクライアント接続中, bit4=BLE録音の連続ストリーミング送信中 */
 uint32_t Comm_GetLinkStatus(void);
 
 /* 通信サービス側が録っている音声窓をコピーして受け取る。

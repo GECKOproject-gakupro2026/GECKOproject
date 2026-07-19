@@ -53,28 +53,21 @@ volatile bool bleHostActivity = false; /* any GATT write (fe41) since the last
                                     awake over BLE, mirroring how any inbound
                                     UART/TCP byte sets nsActivity */
 
-/* 録音転送はハイブリッド方式:
- *  (1) REC_STOP 後、まず全チャンクをペーシング付き自動プッシュで高速に送る
- *      (bleRecPushActive / bleRecOff / bleRecChunkSeq)。gap を空けて BLE 無線層の
- *      ドロップを抑えるが、それでも取りこぼしは起きうる。
- *  (2) 送り終えたら REC_INFO(総サンプル/総チャンク)を1回返す(bleRecInfoPending)。
- *  (3) PC は受信済み seq と総数を突き合わせ、欠落だけを REC_GET で再要求する。
- *      GATT コールバックが seq をキュー(bleGetQueue)に積み、ServeRecGet() が
- *      1 poll = 1 REC_CHUNK で応答する。少数の欠落を埋めるだけなので速い。
- * これで「大部分は高速な自動プッシュ、残りは確実な再要求」を両立する。 */
-bool bleRecPushActive = false;
-uint32_t bleRecOff = 0;
-uint16_t bleRecChunkSeq = 0;
-bool bleRecInfoPending = false;
+/* 録音転送は連続ストリーミング方式: recorder::FeedPcm() が録音しながら
+ * kBlockSamples ごとに完結ADPCMブロックをリングへ積み、PumpRecStream() が
+ * ペーシングしつつ recorder::PopBlock() で1つずつ取り出して REC_CHUNK として
+ * 送る。録音中も送信が並行して進むので、RAM上の録音バッファに依らず(リングの
+ * 送信待ち分だけ)無制限長の録音ができる。REC_STOP 後は残りのブロックを送り
+ * 切ったら REC_END(総ブロック数)を1回送って終える。1ブロック=1チャンクなので
+ * チャンク欠落はその区間の音飛びで済み、他ブロックの predictor には波及しない
+ * (各ブロックが自己完結ヘッダを持つため)。取りこぼしを追加で再送する仕組みは
+ * 持たない(送信済みブロックはリングから解放され再送できないため)。 */
+bool bleStreamActive = false;   /* REC_STOP 後、残りを送り切るまで true を維持 */
+bool bleRecEndPending = false;  /* 送り切った直後、REC_END を1回返す */
 
 /* notify 送信のペーシング用。前回チャンク送信 tick。 */
 uint32_t bleLastChunkTick = 0;
 constexpr uint32_t kRecNotifyGapMs = 12U;
-
-constexpr uint32_t kGetQueueLen = 32U;
-volatile uint16_t bleGetQueue[kGetQueueLen];
-volatile uint32_t bleGetHead = 0; /* 次に取り出す位置 */
-volatile uint32_t bleGetTail = 0; /* 次に積む位置 */
 
 /* Raw AT exchange (polling, before the interrupt-driven client starts):
  * prints the module's literal reply so protocol mismatches are visible. */
@@ -195,9 +188,9 @@ void SendStatus(const telemetry::FullStatus &st)
   mini.die_temp_x100 = st.die_temp_x100;
   /* bits 0-2: existing link/sensor flags. bits 3-4: NonSecure device state
    * (telemetry::GetDeviceState(), forwarded from AppState_t via
-   * Comm_SetDeviceState() - 0=IDLE, 1=ACTIVE_ACQUIRE, 2=ACTIVE_COMM). Fits in
-   * 2 bits (max value 3) with no MiniStatus size change; bits 5-7 stay free
-   * for later use. */
+   * Comm_SetDeviceState() - 0=IDLE, 1=ACTIVE_ACQUIRE, 2=ACTIVE_COMM,
+   * 3=ACTIVE_BLE_REC). Fits in 2 bits (max value 3) with no MiniStatus size
+   * change; bits 5-7 stay free for later use. */
   uint32_t devState = telemetry::GetDeviceState() & 0x3U;
   mini.flags = static_cast<uint8_t>((st.ble_alive != 0U ? 1U : 0U) |
                                     (st.wifi_alive != 0U ? 2U : 0U) |
@@ -222,21 +215,20 @@ void SendStatus(const telemetry::FullStatus &st)
  * でも AT サーバの64バイト特性(str_received[64])のマージンぎりぎりなので、生TLV
  * [cmd u8][seq u16 LE][payload] を使う。 */
 
-/* 実際に REC_INFO(総サンプル数・総チャンク数)を1つ notify で返す。 */
-void sendRecInfoNotify()
+/* 録音が完全に終わった(Stop済み・リングも空)ことを示す REC_END を1つ notify
+ * で返す。ペイロードは [total_samples u32 LE][total_blocks u16 LE]。ストリーミング
+ * では録音完了前に総数が分からないため、最後に一度だけ送る形にした
+ * (旧 REC_INFO と同じレイアウトだが総ブロック数を運ぶ)。 */
+void sendRecEndNotify(uint32_t totalSamples, uint32_t totalBlocks)
 {
-  uint32_t used = recorder::UsedBytes();
-  uint32_t totalChunks = (used + kRecChunkPayload - 1U) / kRecChunkPayload; /* ceil */
-  uint32_t totalSamples = recorder::TotalSamples();
-
   uint8_t info[1U + 4U + 2U];
-  info[0] = FRAME_CMD_REC_INFO;
+  info[0] = FRAME_CMD_REC_END;
   info[1] = static_cast<uint8_t>(totalSamples & 0xFFU);
   info[2] = static_cast<uint8_t>((totalSamples >> 8) & 0xFFU);
   info[3] = static_cast<uint8_t>((totalSamples >> 16) & 0xFFU);
   info[4] = static_cast<uint8_t>((totalSamples >> 24) & 0xFFU);
-  info[5] = static_cast<uint8_t>(totalChunks & 0xFFU);
-  info[6] = static_cast<uint8_t>((totalChunks >> 8) & 0xFFU);
+  info[5] = static_cast<uint8_t>(totalBlocks & 0xFFU);
+  info[6] = static_cast<uint8_t>((totalBlocks >> 8) & 0xFFU);
 
   stm32wb_at_BLE_NOTIF_VAL_t notif = {};
   notif.svc_index = 1;
@@ -246,35 +238,32 @@ void sendRecInfoNotify()
   (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
 }
 
-/* REC_STOP を受けて自動プッシュ転送を開始する。前回の REC_GET 積み残しも捨てる。 */
+/* REC_START を受けてストリーミング転送状態に入る。Service::poll() が
+ * recorder::Start() の直後に呼ぶ。 */
 void SendRecInfo_Arm()
 {
-  bleRecPushActive = true;
-  bleRecOff = 0;
-  bleRecChunkSeq = 0;
-  bleRecInfoPending = false;
-  bleGetHead = bleGetTail; /* 前回の要求キューを破棄 */
+  bleStreamActive = true;
+  bleRecEndPending = false;
+  BSP_LED_On(LED_GREEN); /* 録音送信中は緑LEDを点灯し続ける(REC_END送出まで) */
 }
 
-/* 自動プッシュ: ペーシングを空けつつ、1 poll = 1 REC_CHUNK で先頭から順に送る。
- * 全部送り終えたら REC_INFO を1回返し、以降は PC が欠落を REC_GET で埋める。 */
+/* 毎 poll 呼ぶ: ペーシングしつつ recorder のリングから1ブロックずつ取り出して
+ * REC_CHUNK として送る。録音中(recorder::Active())でも録音停止後(残り送信中)
+ * でも動く。全部送り切って recorder が非アクティブになったら REC_END を1回
+ * 返してストリーミングを終える。 */
 void SendRecInfo()
 {
-  if (!bleLinkOk || !bleConnected)
+  if (!bleStreamActive || !bleLinkOk || !bleConnected)
   {
     return;
   }
 
-  /* プッシュ完了後: REC_INFO を返して自動プッシュ段階を終える。 */
-  if (bleRecInfoPending)
+  if (bleRecEndPending)
   {
-    sendRecInfoNotify();
-    bleRecInfoPending = false;
-    return;
-  }
-
-  if (!bleRecPushActive)
-  {
+    sendRecEndNotify(recorder::TotalSamples(), recorder::TotalBlocks());
+    bleRecEndPending = false;
+    bleStreamActive = false;
+    BSP_LED_Off(LED_GREEN);
     return;
   }
 
@@ -285,63 +274,31 @@ void SendRecInfo()
     return;
   }
 
-  uint8_t raw[3U + kRecChunkPayload];
-  uint32_t n = recorder::Read(bleRecOff, &raw[3], kRecChunkPayload);
-  if (n == 0U)
+  uint8_t raw[3U + recorder::kBlockBytes];
+  uint32_t len = 0U;
+  uint32_t seq = 0U;
+  if (recorder::PopBlock(&raw[3], &len, &seq))
   {
-    /* 送り切った: 次の poll で REC_INFO を返す。 */
-    bleRecPushActive = false;
-    bleRecInfoPending = true;
+    raw[0] = FRAME_CMD_REC_CHUNK;
+    raw[1] = static_cast<uint8_t>(seq & 0xFFU);
+    raw[2] = static_cast<uint8_t>(seq >> 8);
+
+    stm32wb_at_BLE_NOTIF_VAL_t notif = {};
+    notif.svc_index = 1;
+    notif.char_index = 2;
+    notif.val_tab_len = static_cast<uint8_t>(3U + len);
+    memcpy(notif.val_tab, raw, 3U + len);
+    (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
+    bleLastChunkTick = nowTick;
     return;
   }
-  raw[0] = FRAME_CMD_REC_CHUNK;
-  raw[1] = static_cast<uint8_t>(bleRecChunkSeq & 0xFFU);
-  raw[2] = static_cast<uint8_t>(bleRecChunkSeq >> 8);
-  bleRecChunkSeq++;
-  bleRecOff += n;
 
-  stm32wb_at_BLE_NOTIF_VAL_t notif = {};
-  notif.svc_index = 1;
-  notif.char_index = 2;
-  notif.val_tab_len = static_cast<uint8_t>(3U + n);
-  memcpy(notif.val_tab, raw, 3U + n);
-  (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
-  bleLastChunkTick = nowTick;
-}
-
-/* REC_GET 要求キューから1件取り出し、その seq の REC_CHUNK を1つ返す
- * (1 poll = 最大1 notify)。取りこぼしたら PC が同じ seq を再要求するので、
- * ここでは信頼性のための再送やペーシングは不要 - PC のポーリングが律速。 */
-void ServeRecGet()
-{
-  if (bleGetHead == bleGetTail)
+  /* リングが空。録音がまだアクティブなら次のブロックを待つ。停止済みなら
+   * 送り切ったということなので REC_END を次回返す。 */
+  if (!recorder::Active())
   {
-    return; /* キューが空 */
+    bleRecEndPending = true;
   }
-  if (!bleLinkOk || !bleConnected)
-  {
-    return;
-  }
-  uint16_t seq = bleGetQueue[bleGetHead];
-  bleGetHead = (bleGetHead + 1U) % kGetQueueLen;
-
-  uint8_t raw[3U + kRecChunkPayload];
-  uint32_t off = static_cast<uint32_t>(seq) * kRecChunkPayload;
-  uint32_t n = recorder::Read(off, &raw[3], kRecChunkPayload);
-  if (n == 0U)
-  {
-    return; /* 範囲外: 返さない(PCは total_chunks で範囲を知っているので要求しない) */
-  }
-  raw[0] = FRAME_CMD_REC_CHUNK;
-  raw[1] = static_cast<uint8_t>(seq & 0xFFU);
-  raw[2] = static_cast<uint8_t>(seq >> 8);
-
-  stm32wb_at_BLE_NOTIF_VAL_t notif = {};
-  notif.svc_index = 1;
-  notif.char_index = 2;
-  notif.val_tab_len = static_cast<uint8_t>(3U + n);
-  memcpy(notif.val_tab, raw, 3U + n);
-  (void)stm32wb_at_client_Set(BLE_NOTIF_VAL, &notif);
 }
 
 uint8_t TakeRecCmd()
@@ -360,9 +317,9 @@ bool TakeHostActivity()
 
 bool IsRecTxActive()
 {
-  /* 自動プッシュ中、REC_INFO 未応答、または REC_GET キューにデータがある間は
-   * 転送中扱い(この間テレメトリを止めて notify リンクを録音転送に譲る)。 */
-  return bleRecPushActive || bleRecInfoPending || (bleGetHead != bleGetTail);
+  /* ストリーミング中(録音中または残ブロック送信中)は転送中扱い(この間テレメトリ
+   * を止めて notify リンクを録音転送専用に譲る)。 */
+  return bleStreamActive;
 }
 
 } // namespace comm_ble
@@ -442,7 +399,9 @@ extern "C" uint8_t stm32wb_at_BLE_EVT_WRITE_cb(stm32wb_at_BLE_EVT_WRITE_t *param
    * in Service::poll() via comm_ble::TakeHostActivity(). */
   comm_ble::bleHostActivity = true;
 
-  if ((param->svc_index == 1U) && (param->val_tab_len > 0U))
+  /* 録音送信中は緑LEDを SendRecInfo_Arm()/SendRecInfo() が専有する(点灯し続ける)
+   * ので、keep-alive バイトによる通常のLED制御はここで無効化する。 */
+  if (!comm_ble::bleStreamActive && (param->svc_index == 1U) && (param->val_tab_len > 0U))
   {
     if (param->val_tab[0] != 0U)
     {
@@ -480,20 +439,6 @@ extern "C" uint8_t stm32wb_at_BLE_EVT_WRITE_cb(stm32wb_at_BLE_EVT_WRITE_t *param
       else if (cmd == FRAME_CMD_REC_STOP)
       {
         comm_ble::bleRecCmd = 2U;
-      }
-      else if (cmd == FRAME_CMD_REC_GET && len >= 2U)
-      {
-        /* 要求チャンクseqをキューに積むだけ(REC_CHUNK応答のUART送信は poll() の
-         * ServeRecGet() が担当)。キュー満杯なら積まない(PCがタイムアウトで
-         * 再要求するので取りこぼしと同じ扱いになり安全)。 */
-        uint16_t gseq = static_cast<uint16_t>(payload[0] |
-                        (static_cast<uint16_t>(payload[1]) << 8));
-        uint32_t nextTail = (comm_ble::bleGetTail + 1U) % comm_ble::kGetQueueLen;
-        if (nextTail != comm_ble::bleGetHead)
-        {
-          comm_ble::bleGetQueue[comm_ble::bleGetTail] = gseq;
-          comm_ble::bleGetTail = nextTail;
-        }
       }
     }
   }

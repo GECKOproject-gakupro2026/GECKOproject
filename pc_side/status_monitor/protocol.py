@@ -22,10 +22,10 @@ CMD_FW_COMPLETE = 0x05  # PC->board: size u32 + crc16 u16
 CMD_STATUS_REQ = 0x06   # PC->board: query OTA state
 CMD_STATUS_RESP = 0x07  # board->PC: "<BIIHB" state/received/expected/crc/err
 CMD_FW_APPLY = 0x08     # PC->board: copy staged NS image to Bank2 and run it
-CMD_REC_START = 0x09    # PC->board: start SRAM recording (BLE GATT write)
-CMD_REC_STOP = 0x0A     # PC->board: stop SRAM recording (BLE GATT write)
-CMD_REC_CHUNK = 0x0B    # board->PC: raw TLV [cmd][seq u16][adpcm], not frame_codec
-CMD_REC_END = 0x0C      # board->PC: raw TLV [cmd][total_samples u32][crc16], not frame_codec
+CMD_REC_START = 0x09    # PC->board: start continuous-streaming recording (BLE GATT write)
+CMD_REC_STOP = 0x0A     # PC->board: stop recording; remaining ring blocks still stream out
+CMD_REC_CHUNK = 0x0B    # board->PC: raw TLV [cmd][seq u16][adpcm block, self-contained], not frame_codec
+CMD_REC_END = 0x0C      # board->PC: raw TLV [cmd][total_samples u32][total_blocks u16], not frame_codec; sent once after the last chunk
 CMD_LINK_STANDBY = 0x0D # PC->board: end/idle the sending link
 CMD_TIME_SYNC = 0x0E    # PC->board: u32 Unix epoch seconds (LE)
 CMD_ENTER_COMM = 0x0F   # PC->board: explicit IDLE->ACTIVE wake request
@@ -36,9 +36,10 @@ CMD_LOG_RESET = 0x13    # PC->board: erase the non-volatile state log
 CMD_IDLE_BEACON = 0x14  # board->PC: "<IB" uptime_ms/device_state, no sensor data
 CMD_SET_SENSOR_RATE = 0x15  # PC->board: "<BH" sensor_id/period_ms (0=env,1=light,2=tof,3=motion)
 # 0x16 was CMD_STATUS_FRAG (BLE full-sensor fragment) - retired with the
-# "BLE全データ" tab. 0x17 was CMD_REC_RESEND (legacy) - superseded by REC_GET.
-CMD_REC_GET = 0x18      # PC->board: [seq u16 LE], poll one REC_CHUNK (stop&wait)
-CMD_REC_INFO = 0x19     # board->PC: [total_samples u32][total_chunks u16], reply to REC_STOP
+# "BLE全データ" tab. 0x17-0x19 were CMD_REC_RESEND/REC_GET/REC_INFO (stop&wait
+# chunk-poll recording transfer) - retired in favor of continuous streaming
+# (REC_START arms the board immediately; REC_CHUNK blocks stream out as
+# they're encoded; REC_END carries the final totals). Do not reuse these IDs.
 CMD_ACK = 0x7E          # "<BBI" orig_cmd/orig_seq/arg
 CMD_NACK = 0x7F         # "<BBB" orig_cmd/orig_seq/error
 
@@ -82,9 +83,12 @@ MINI_FMT_V2 = "<BhHHHH3h3h3hhhHhBB"
 MINI_SIZE_V2 = struct.calcsize(MINI_FMT_V2)  # 39 (v2: all sensors)
 
 AUDIO_SAMPLE_RATE = 16000
-# BLE録音は 16 kHz フルレート(デシメーションなし、recorder.cpp の FeedPcm)。
-# 240B notify ペイロードでチャンク数を抑えているので 16 kHz でも十分速い。
-REC_SAMPLE_RATE = 16000
+# BLE録音は 16 kHz を recorder.cpp の FeedPcm() 内で 8 kHz に 2:1 デシメート
+# してから ADPCM 圧縮する。連続ストリーミング転送(230400 baud)の実測送信
+# レート(~26.6チャンク/秒)が 16 kHzの生成レート(33.9チャンク/秒)に届かず
+# リングが溢れていたため、生成レートを 8 kHz(16.95チャンク/秒)に落として
+# 欠落をほぼ無くした。
+REC_SAMPLE_RATE = 8000
 
 
 def decode_audio(payload: bytes) -> list[int]:

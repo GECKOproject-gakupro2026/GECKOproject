@@ -70,16 +70,18 @@ def decode_block(block: bytes) -> list[int]:
     return samples
 
 
-# The board (Secure/Core/Src/recorder.cpp) encodes one self-contained ADPCM
-# block per FeedPcm() call. BLE recordings are 16 kHz (no decimation), so each
-# FeedPcm gets 512 samples -> a 4 + 512/2 = 260-byte block; the trailing block
-# may be shorter. Over BLE the byte stream is sliced into fixed REC_CHUNKs that
-# do NOT align to these blocks; concatenating chunks in seq order reproduces the
-# exact block stream, which this walks. Each block re-seeds the predictor from
-# its own header, so a tiny encoder/decoder drift can't accumulate (the
-# continuous single-header variant diverged to a DC runaway - reverted).
-BLOCK_SAMPLES = 512  # BLE recording (16 kHz full-rate)
-BLOCK_SIZE = BLOCK_HEADER_SIZE + BLOCK_SAMPLES // 2  # 260
+# The board (Secure/Core/Src/recorder.cpp) continuously streams one
+# self-contained ADPCM block per REC_CHUNK: each block is exactly
+# kBlockSamples=472 PCM samples -> a 4 + 472/2 = 240-byte block, which is also
+# the REC_CHUNK payload size, so chunk boundaries and block boundaries always
+# coincide (the trailing chunk of a recording may be shorter). Each block
+# re-seeds the predictor from its own header, so a tiny encoder/decoder drift
+# can't accumulate (an earlier continuous single-header variant diverged to a
+# DC runaway - reverted). recorder.cpp's FeedPcm() decimates the 16 kHz input
+# to 8 kHz before encoding (see protocol.REC_SAMPLE_RATE), so these are 8 kHz
+# samples: 472/8000 = 59 ms of audio per block/chunk.
+BLOCK_SAMPLES = 472  # BLE recording (8 kHz, continuous streaming)
+BLOCK_SIZE = BLOCK_HEADER_SIZE + BLOCK_SAMPLES // 2  # 240
 
 
 def decode_stream(data: bytes, block_samples: int = BLOCK_SAMPLES) -> list[int]:

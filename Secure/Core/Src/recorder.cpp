@@ -2,6 +2,14 @@
   ******************************************************************************
   * @file    recorder.cpp
   * @brief   Recorder implementation. See recorder.hpp.
+  *
+  *          連続ストリーミング方式: 録音しながら1ブロック=1チャンク(240B)ずつ
+  *          BLEへ送出し、送信済みブロックをリングから解放する。RAM使用量に依らず
+  *          無制限長の録音ができる。各ブロックは自己完結ADPCM(先頭ヘッダ)なので、
+  *          チャンク欠落はそのブロック1個の局所的音飛びで済み発散しない。
+  *          FeedPcm() は入力(16 kHz)を 8 kHz に 2:1 デシメートしてから
+  *          ADPCMエンコードする(BLE転送レートが16kHz生成レートに追いつけない
+  *          ため。詳細はFeedPcm()内コメント参照)。
   ******************************************************************************
   */
 #include "recorder.hpp"
@@ -16,27 +24,68 @@ namespace recorder
 namespace
 {
 
-uint8_t s_buf[kBufBytes];
-uint32_t s_writePos = 0;
-uint32_t s_totalSamples = 0;
+/* ブロック単位のリング。各スロットは kBlockBytes の完結ADPCMブロック。 */
+uint8_t  s_ring[kRingBlocks][kBlockBytes];
+uint32_t s_ringLen[kRingBlocks];   /* 各スロットの有効バイト数(末尾ブロックは短いことがある) */
+uint32_t s_ringSeq[kRingBlocks];   /* 各スロットのブロック通し番号 */
+uint32_t s_head = 0;               /* 次に PopBlock で取り出すスロット */
+uint32_t s_tail = 0;               /* 次に書き込むスロット */
+uint32_t s_count = 0;              /* リング内の送信待ちブロック数 */
+
+/* kBlockSamples 個たまるまで PCM を溜めるアキュムレータ。 */
+int16_t  s_acc[kBlockSamples];
+uint32_t s_accCount = 0;
+
 adpcm_state_t s_state = {};
-bool s_active = false;
+uint32_t s_totalBlocks = 0;        /* 次に振る seq */
+uint32_t s_totalSamples = 0;       /* FeedPcm() へ供給された総サンプル数 */
+bool     s_active = false;
+
+/* アキュムレータ内の kBlockSamples 個(または末尾の端数)を1ブロックにエンコード
+ * してリングへ積む。リング満杯なら最古を捨てる(drop-oldest)。 */
+void flushBlock()
+{
+  if (s_accCount == 0U)
+  {
+    return;
+  }
+  if (s_count == kRingBlocks)
+  {
+    /* 送信が追いつかず満杯: 最古を捨てて上書き(音は飛ぶが録音は継続)。 */
+    s_head = (s_head + 1U) % kRingBlocks;
+    s_count--;
+  }
+  uint8_t *out = s_ring[s_tail];
+  size_t written = adpcm_encode(&s_state, s_acc, s_accCount, out);
+  s_ringLen[s_tail] = static_cast<uint32_t>(written);
+  s_ringSeq[s_tail] = s_totalBlocks;
+  s_tail = (s_tail + 1U) % kRingBlocks;
+  s_count++;
+  s_totalBlocks++;
+  s_accCount = 0U;
+}
 
 } // namespace
 
 void Start()
 {
-  s_writePos = 0;
-  s_totalSamples = 0;
+  s_head = s_tail = s_count = 0U;
+  s_accCount = 0U;
   s_state.predictor = 0;
   s_state.step_index = 0;
+  s_totalBlocks = 0U;
+  s_totalSamples = 0U;
   s_active = true;
 }
 
-uint32_t Stop()
+void Stop()
 {
+  if (!s_active)
+  {
+    return;
+  }
   s_active = false;
-  return s_writePos;
+  flushBlock(); /* 端数サンプルを最後のブロックとして送信待ちに積む */
 }
 
 bool Active() { return s_active; }
@@ -47,47 +96,44 @@ void FeedPcm(const int16_t *pcm, size_t count)
   {
     return;
   }
-
-  /* BLE録音は 16 kHz フルレート(デシメーションなし)で ADPCM 圧縮する。音質を
-   * 下げずに録りたいという要求のため。240B notify ペイロードでチャンク数を大きく
-   * 減らしたので、16 kHz でも 3 秒あたり約104チャンク(旧 8kHz/58B 時の219より
-   * ずっと少ない)。PC側は 16 kHz で WAV を書く(protocol.REC_SAMPLE_RATE)。
-   * count は常に 512(偶数)。
-   *
-   * 各 FeedPcm を1つの自己完結 ADPCM ブロック(先頭にヘッダ)として書く。連続
-   * ストリーム(ヘッダ1回)方式は、ファームのエンコーダと PC のデコーダの微小な
-   * 状態差が延々と蓄積して predictor が DC 発散する不具合があったため、各ブロックが
-   * ヘッダから状態を復元し直す自己完結方式にしている(以前音声が正しく録れていた
-   * 構成)。 */
-  size_t need = ADPCM_BLOCK_HEADER_SIZE + (count + 1U) / 2U;
-  if (s_writePos + need > kBufBytes)
+  /* BLE転送レートが録音の生成レートに追いつけない(230400 baudのAT往復が
+   * 律速。16 kHzでは実測26.6チャンク/秒 vs 生成33.9チャンク/秒でリングが
+   * 溢れ約10%欠落した)ため、16 kHz → 8 kHz に 2:1 デシメートしてから
+   * ADPCM圧縮する(音声帯域には十分。エイリアシング低減に単純間引きではなく
+   * 隣接2サンプルの平均を取る簡易ローパス)。count は常に偶数(512)で来るので
+   * 端数処理は不要。PC側は 8 kHz で WAV を書く(protocol.REC_SAMPLE_RATE)。 */
+  size_t outCount = count / 2U;
+  for (size_t i = 0; i < outCount; ++i)
   {
-    s_active = false;
-    printf("[REC] buffer full, auto-stopped: samples=%lu bytes=%lu\r\n",
-           static_cast<unsigned long>(s_totalSamples),
-           static_cast<unsigned long>(s_writePos));
-    return;
+    int32_t avg = (static_cast<int32_t>(pcm[2U * i]) +
+                   static_cast<int32_t>(pcm[2U * i + 1U])) / 2;
+    s_acc[s_accCount++] = static_cast<int16_t>(avg);
+    if (s_accCount == kBlockSamples)
+    {
+      flushBlock();
+    }
   }
-
-  size_t written = adpcm_encode(&s_state, pcm, count, &s_buf[s_writePos]);
-  s_writePos += static_cast<uint32_t>(written);
-  s_totalSamples += static_cast<uint32_t>(count);
+  s_totalSamples += static_cast<uint32_t>(outCount);
 }
 
-uint32_t UsedBytes() { return s_writePos; }
+bool PopBlock(uint8_t *dst, uint32_t *outLen, uint32_t *outSeq)
+{
+  if (s_count == 0U)
+  {
+    return false;
+  }
+  memcpy(dst, s_ring[s_head], s_ringLen[s_head]);
+  *outLen = s_ringLen[s_head];
+  *outSeq = s_ringSeq[s_head];
+  s_head = (s_head + 1U) % kRingBlocks;
+  s_count--;
+  return true;
+}
+
+bool HasPending() { return s_count != 0U; }
+
+uint32_t TotalBlocks() { return s_totalBlocks; }
 
 uint32_t TotalSamples() { return s_totalSamples; }
-
-uint32_t Read(uint32_t off, uint8_t *dst, uint32_t len)
-{
-  if (off >= s_writePos)
-  {
-    return 0U;
-  }
-  uint32_t avail = s_writePos - off;
-  uint32_t n = (len < avail) ? len : avail;
-  memcpy(dst, &s_buf[off], n);
-  return n;
-}
 
 } // namespace recorder

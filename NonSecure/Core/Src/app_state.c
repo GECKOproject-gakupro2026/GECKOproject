@@ -20,9 +20,11 @@
 
 #include "main.h" /* HAL_GetTick */
 
-/* Comm_GetLinkStatus のビット(comm_api.h と一致): bit2=BLE接続中, bit3=TCP client */
+/* Comm_GetLinkStatus のビット(comm_api.h と一致):
+ * bit2=BLE接続中, bit3=TCP client, bit4=BLE録音送信中 */
 #define LINK_BIT_BLE_CONNECTED  (1U << 2)
 #define LINK_BIT_TCP_CLIENT     (1U << 3)
+#define LINK_BIT_BLE_REC_TX     (1U << 4)
 
 void AppState_Init(AppStateCtx_t *ctx, uint32_t now_ms)
 {
@@ -46,7 +48,8 @@ void AppState_Init(AppStateCtx_t *ctx, uint32_t now_ms)
 static int idle_entry_allowed(const AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 {
   int timedOut = (int32_t)(now_ms - ctx->lastActivityMs) >= (int32_t)CFG_IDLE_TIMEOUT_MS;
-  int linkActive = (linkStatus & (LINK_BIT_BLE_CONNECTED | LINK_BIT_TCP_CLIENT)) != 0U;
+  int linkActive = (linkStatus &
+                    (LINK_BIT_BLE_CONNECTED | LINK_BIT_TCP_CLIENT | LINK_BIT_BLE_REC_TX)) != 0U;
   return timedOut && !linkActive;
 }
 
@@ -60,7 +63,8 @@ static int wake_requested(const AppStateCtx_t *ctx, uint32_t now_ms, uint32_t li
 {
   (void)ctx;
   (void)now_ms;
-  int linkActive = (linkStatus & (LINK_BIT_BLE_CONNECTED | LINK_BIT_TCP_CLIENT)) != 0U;
+  int linkActive = (linkStatus &
+                    (LINK_BIT_BLE_CONNECTED | LINK_BIT_TCP_CLIENT | LINK_BIT_BLE_REC_TX)) != 0U;
   int explicitWake = (Comm_TakeExplicitWake() != 0U);
   return explicitWake || linkActive;
 }
@@ -106,11 +110,13 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
 
     case STATE_ACTIVE_ACQUIRE:
     case STATE_ACTIVE_COMM:
+    case STATE_ACTIVE_BLE_REC:
     {
       /* 両方を必ず評価してフラグを消費する(短絡評価でTakeStopRequestedが
        * 呼ばれ損ねないように、先に変数へ受けてからORする)。 */
       int timedOutIdle = idle_entry_allowed(ctx, now_ms, linkStatus);
       int stopRequested = (Comm_TakeStopRequested() != 0U);
+      int bleRecActive = (linkStatus & LINK_BIT_BLE_REC_TX) != 0U;
       if (timedOutIdle || stopRequested)
       {
         /* IDLEへ: 電力を食う ToF だけ SLEEP。センサー取得/送信は停止し、
@@ -122,11 +128,32 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
         ctx->nextLedMs = now_ms;
         ctx->nextBeaconMs = now_ms;
       }
-      else if ((int32_t)(now_ms - ctx->nextLedMs) >= 0)
+      else if (bleRecActive)
       {
+        /* BLE録音の連続ストリーミング転送中: Secure側(comm_ble.cpp)が緑LED
+         * (GPIOH PIN_7、board_io.cのLED_GREEN_PINと同一物理ピン)を専有点灯
+         * させている間、NonSecure側のACTIVEハートビートトグルは行わない
+         * (行うと同じピンを取り合って点滅して見えてしまう)。センサー取得/
+         * UART・TCPテレメトリ送信サイクル自体は下のACTIVEブロックで通常通り
+         * 続く - 止めるのはLEDだけ。 */
+        ctx->state = STATE_ACTIVE_BLE_REC;
         ctx->nextLedMs = now_ms + CFG_ACTIVE_HB_MS;
-        Board_LedRedOff();
-        Board_LedGreenToggle(); /* 緑 ハートビート */
+      }
+      else
+      {
+        if (ctx->state == STATE_ACTIVE_BLE_REC)
+        {
+          /* 録音送信が終わった: 通常のCOMMサイクルへ戻り、LEDハートビートを
+           * ここから仕切り直す(録音中に溜まった経過時間でいきなり飛ばない)。 */
+          ctx->state = STATE_ACTIVE_COMM;
+          ctx->nextLedMs = now_ms;
+        }
+        if ((int32_t)(now_ms - ctx->nextLedMs) >= 0)
+        {
+          ctx->nextLedMs = now_ms + CFG_ACTIVE_HB_MS;
+          Board_LedRedOff();
+          Board_LedGreenToggle(); /* 緑 ハートビート */
+        }
       }
       break;
     }
@@ -189,7 +216,14 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
     }
     (void)Comm_SendTelemetry(SensorStore_GetForSend());
     ctx->commReturnMs = HAL_GetTick();
-    ctx->state = STATE_ACTIVE_COMM;
+    /* BLE録音送信中(STATE_ACTIVE_BLE_REC)はCOMM/ACQUIREサイクル自体(センサー
+     * 取得・UART/TCPテレメトリ送信)は続けるが、状態値はBLE_RECのまま維持する
+     * (ここでCOMM/ACQUIREに上書きすると、上のswitch文が次周でLEDハートビート
+     * を再開してしまい緑LEDの専有点灯が壊れる)。 */
+    if (ctx->state != STATE_ACTIVE_BLE_REC)
+    {
+      ctx->state = STATE_ACTIVE_COMM;
+    }
 
     /* 次回COMMは「前回の戻り + 周期」。大きく遅延したらバースト回避で resync。 */
     ctx->nextCommMs += CFG_COMM_PERIOD_MS;
@@ -201,6 +235,9 @@ void AppState_Tick(AppStateCtx_t *ctx, uint32_t now_ms, uint32_t linkStatus)
     /* --- ACQUIRE --- 次フレーム用スナップショットを先読み。 */
     SensorStore_AcquireAll();
     ctx->haveAcquired = 1U;
-    ctx->state = STATE_ACTIVE_ACQUIRE;
+    if (ctx->state != STATE_ACTIVE_BLE_REC)
+    {
+      ctx->state = STATE_ACTIVE_ACQUIRE;
+    }
   }
 }
