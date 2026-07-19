@@ -693,16 +693,20 @@ class StatusMonitorApp:
         RECORD_DIR.mkdir(exist_ok=True)
         name = _dt.datetime.now().strftime("rec_%Y%m%d_%H%M%S.wav")
         path = RECORD_DIR / name
+        # BLE録音は 8 kHz(REC_SAMPLE_RATE)、UART/TCP音声は 16 kHz(AUDIO_SAMPLE_RATE)。
+        # 秒数表示は WAV に書くレートと必ず同じ rate で割ること(以前ここが常に
+        # 16 kHz 固定で、8 kHz 録音の長さが半分に表示されるバグがあった)。
+        rate = sample_rate or protocol.AUDIO_SAMPLE_RATE
         with wave.open(str(path), "wb") as wav:
             wav.setnchannels(1)
             wav.setsampwidth(2)
-            wav.setframerate(sample_rate or protocol.AUDIO_SAMPLE_RATE)
+            wav.setframerate(rate)
             import struct as _struct
             wav.writeframes(_struct.pack(f"<{len(samples)}h", *samples))
-        secs = len(samples) / protocol.AUDIO_SAMPLE_RATE
+        secs = len(samples) / rate
         self.last_wav = path
         self.play_btn.configure(state="normal")
-        self._log(f"録音保存: {path.name} ({secs:.1f}秒, {len(samples)}サンプル)")
+        self._log(f"録音保存: {path.name} ({secs:.1f}秒, {len(samples)}サンプル, {rate}Hz)")
 
     def _toggle_record_ble(self) -> None:
         # The board streams continuously: while REC_START..REC_STOP is
@@ -870,9 +874,15 @@ class StatusMonitorApp:
         if st.device_state is not None:
             label = self.DEVICE_STATE_LABELS.get(st.device_state, f"?({st.device_state})")
             self.dev_state_var.set(f"状態: {label}")
-        if not st.compact:
-            secs = st.uptime_ms // 1000
-            self.uptime_var.set(f"{secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}")
+        # uptime は MiniStatus v2(BLE)にも uptime_s として含まれる(秒粒度)ので
+        # BLE接続時も更新する。以前は `if not st.compact:` で囲われており、BLE
+        # 接続時にダッシュボードの多くの項目(uptime/加速度/ジャイロ/地磁気/
+        # BLE・WiFi状態)が一切更新されないバグがあった。MiniStatus v2 は
+        # これらを全て含む(protocol.decode_status の MINI_FMT_V2 参照)ので、
+        # ここで更新してよい。MiniStatus に含まれないもの(メモリ使用量・波形)
+        # だけを compact 時にスキップする。
+        secs = st.uptime_ms // 1000
+        self.uptime_var.set(f"{secs // 3600:02d}:{secs % 3600 // 60:02d}:{secs % 60:02d}")
 
         self.env_vars["temp"].set(f"{st.temp_c:.2f}")
         self.env_vars["hum"].set(f"{st.humidity:.1f}")
@@ -880,12 +890,16 @@ class StatusMonitorApp:
         self.env_vars["light"].set(str(st.light_raw))
         self.env_vars["tof"].set(str(st.tof_mm) if (st.tof_ok or st.compact) else "--")
 
+        # 加速度/ジャイロ/地磁気/無線状態は MiniStatus v2 にも含まれるので
+        # BLE接続時(compact)も更新する。
+        self.mot_vars["acc"].set("({: d}, {: d}, {: d})".format(*st.acc_mg))
+        self.mot_vars["gyro"].set("({:.1f}, {:.1f}, {:.1f})".format(*st.gyro_dps))
+        self.mot_vars["mag"].set("({: d}, {: d}, {: d})".format(*st.mag_mgauss))
+        self.radio_vars["ble"].set("OK" if st.ble_alive else "NG")
+        self.radio_vars["wifi"].set("OK" if st.wifi_alive else "NG")
+
         if not st.compact:
-            self.mot_vars["acc"].set("({: d}, {: d}, {: d})".format(*st.acc_mg))
-            self.mot_vars["gyro"].set("({:.1f}, {:.1f}, {:.1f})".format(*st.gyro_dps))
-            self.mot_vars["mag"].set("({: d}, {: d}, {: d})".format(*st.mag_mgauss))
-            self.radio_vars["ble"].set("OK" if st.ble_alive else "NG")
-            self.radio_vars["wifi"].set("OK" if st.wifi_alive else "NG")
+            # メモリ使用量と生波形は FullStatus(UART/TCP)にしか無い。
             self._apply_memory(st)
             self._draw_wave(st.wave)
 
