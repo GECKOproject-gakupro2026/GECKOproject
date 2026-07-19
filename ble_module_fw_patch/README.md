@@ -63,3 +63,18 @@ STM32CubeWB v1.18.0 の `Projects/P-NUCLEO-WB55.Nucleo/Applications/BLE/BLE_AT_S
 `Drivers/BSP/Components/stm32wb_at/stm32wb_at_client.c`（`client_buff_tx`を64→160B）、
 `Secure/Core/Src/comm_ble.cpp`（`bleAtBuffer`を64→160B）、
 `Drivers/BSP/Components/stm32wb_at/stm32wb_at.c`（`str_received`を64→160B、5番と同じ修正）。
+
+7. **(2026-07-19) notifyペイロードを64→248バイトに拡大（録音転送の高速化）**: BLE録音の
+   1チャンクを大きくして転送チャンク数を約1/4に減らすため、notify特性長とAT関連バッファを
+   まとめて拡張した。`CFG_BLE_MAX_ATT_MTU`は元々251なので無線層は対応済み、ボトルネックは
+   GATT特性長とATコマンド文字列バッファだった。
+   - WB5MMG側: `p2p_stm.c`のnotify特性 `aci_gatt_add_char` 第4引数を64→**248**
+     （=ATT_MTU-3、1 notifyで送れる実質上限）。`ble_at_server.c`の`at_buffer`と`main.c`の
+     extern宣言を160→**560**（240Bペイロードのhex行は約505文字）。
+   - 共通ドライバ: `stm32wb_at.c`の`str_received`を160→**560**、`buffer_rx_size`/
+     `buffer_rx_cursor`と`stm32wb_at_Init`引数を`uint8_t`→**`uint16_t`**（255文字上限を撤廃）、
+     `stm32wb_at_ble.h`のNOTIF_VAL/INDIC_VALの`val_tab[64]`→**`val_tab[248]`**。
+   - U585側: `stm32wb_at_client.c`の`client_buff_tx`を160→**560**、
+     `Secure/Core/Src/comm_ble.cpp`の`bleAtBuffer`を160→**560**、`kRecChunkPayload`を58→**240**。
+   これらのドライバファイル(`stm32wb_at.c/.h`, `stm32wb_at_ble.h`)はU585/WB5MMGで共通なので、
+   U585側で編集したものをWBビルドツリーにコピーする(手順3と同じ運用)。
