@@ -26,10 +26,19 @@ bool s_active = false;
 
 void Start()
 {
-  s_writePos = 0;
   s_totalSamples = 0;
   s_state.predictor = 0;
   s_state.step_index = 0;
+  /* One 4-byte header for the WHOLE recording (was: one per 256-sample block,
+   * which reset the predictor at every block boundary and produced audible
+   * clicks). The rest of the stream is raw nibbles appended continuously by
+   * FeedPcm, so the predictor/step_index never reset mid-stream. Layout:
+   * [predictor int16 LE][step_index u8][pad u8][nibbles...]. */
+  s_buf[0] = static_cast<uint8_t>(static_cast<uint16_t>(s_state.predictor) & 0xFFU);
+  s_buf[1] = static_cast<uint8_t>((static_cast<uint16_t>(s_state.predictor) >> 8) & 0xFFU);
+  s_buf[2] = static_cast<uint8_t>(s_state.step_index);
+  s_buf[3] = 0U;
+  s_writePos = ADPCM_BLOCK_HEADER_SIZE;
   s_active = true;
 }
 
@@ -48,20 +57,13 @@ void FeedPcm(const int16_t *pcm, size_t count)
     return;
   }
 
-  /* BLE転送量を半分にするため、録音は 16 kHz → 8 kHz に 2:1 デシメートしてから
-   * ADPCM圧縮する(音声帯域には十分。エイリアシング低減に単純間引きではなく
-   * 隣接2サンプルの平均を取る簡易ローパス)。count は常に 512(偶数)なので
-   * 端数処理は不要。PC側は 8 kHz で WAV を書く(protocol.REC_SAMPLE_RATE)。 */
-  static int16_t decim[256];
-  size_t outCount = count / 2U;
-  for (size_t i = 0; i < outCount; ++i)
-  {
-    int32_t avg = (static_cast<int32_t>(pcm[2U * i]) +
-                   static_cast<int32_t>(pcm[2U * i + 1U])) / 2;
-    decim[i] = static_cast<int16_t>(avg);
-  }
-
-  size_t need = ADPCM_BLOCK_HEADER_SIZE + (outCount + 1U) / 2U;
+  /* Record at the full 16 kHz (no decimation). The enlarged 240-byte notify
+   * payload (kRecChunkPayload) already cut the chunk count ~4x, so we can
+   * afford the 2x data of 16 kHz and still transfer fewer chunks than the old
+   * 8 kHz / 58-byte scheme. PC writes the WAV at 16 kHz (protocol.REC_SAMPLE_RATE).
+   * Header is written once at Start(); here we only append nibbles (no
+   * per-block header), so the predictor stays continuous across feeds. */
+  size_t need = (count + 1U) / 2U;
   if (s_writePos + need > kBufBytes)
   {
     s_active = false;
@@ -71,9 +73,9 @@ void FeedPcm(const int16_t *pcm, size_t count)
     return;
   }
 
-  size_t written = adpcm_encode(&s_state, decim, outCount, &s_buf[s_writePos]);
+  size_t written = adpcm_encode_nibbles(&s_state, pcm, count, &s_buf[s_writePos]);
   s_writePos += static_cast<uint32_t>(written);
-  s_totalSamples += static_cast<uint32_t>(outCount);
+  s_totalSamples += static_cast<uint32_t>(count);
 }
 
 uint32_t UsedBytes() { return s_writePos; }

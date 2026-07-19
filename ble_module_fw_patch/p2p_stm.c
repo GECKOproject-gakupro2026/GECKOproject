@@ -239,8 +239,10 @@ void P2PS_STM_Init(void)
     COPY_P2P_NOTIFY_UUID(uuid16.Char_UUID_128);
     aci_gatt_add_char(aPeerToPeerContext.PeerToPeerSvcHdle,
                       UUID_TYPE_128, &uuid16,
-                      64, /* was 2, then 20: carry full 47/61-byte telemetry
-                             and recording-chunk frames (BLE ATT payload cap) */
+                      248, /* was 2, then 20, 64, 128: now 248 to carry the
+                              larger 240-byte REC_CHUNK (243-byte notify).
+                              ATT_MTU is 251 so 248 (=MTU-3) fits in one
+                              notify - this is the practical max. */
                       CHAR_PROP_NOTIFY,
                       ATTR_PERMISSION_NONE,
                       GATT_NOTIFY_ATTRIBUTE_WRITE, /* gattEvtMask */

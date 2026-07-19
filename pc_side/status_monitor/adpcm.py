@@ -70,30 +70,26 @@ def decode_block(block: bytes) -> list[int]:
     return samples
 
 
-# The board (Secure/Core/Src/recorder.cpp) encodes one self-contained ADPCM
-# block per FeedPcm() call. BLE recordings are decimated to 8 kHz, so each
-# FeedPcm gets 256 samples -> a 4 + 256/2 = 132-byte block. (The live 16 kHz
-# UART stream, if ever recorded, would be 512 samples -> 260 bytes.) The
-# trailing block may be short. Over BLE the byte stream is sliced into fixed
-# 58-byte REC_CHUNKs that do NOT align to these blocks; concatenating chunks in
-# seq order reproduces the exact block stream, which this walks.
-BLOCK_SAMPLES = 256  # BLE recording (8 kHz decimated); pass explicitly if different
-BLOCK_SIZE = BLOCK_HEADER_SIZE + BLOCK_SAMPLES // 2  # 132
+# The board (Secure/Core/Src/recorder.cpp) now writes ONE 4-byte header at the
+# start of the whole recording, then appends raw nibbles continuously (no
+# per-block header). This removes the predictor reset that used to happen every
+# 256 samples and caused audible clicks at block boundaries. So the reassembled
+# REC_CHUNK stream is: [predictor i16 LE][step_index u8][pad u8][nibbles...],
+# decoded as a single continuous ADPCM stream. BLE chunk boundaries are
+# irrelevant once the chunks are concatenated in seq order.
 
 
-def decode_stream(data: bytes, block_samples: int = BLOCK_SAMPLES) -> list[int]:
-    """Decodes a contiguous concatenation of ADPCM blocks (the reassembled
-    REC_CHUNK stream) into PCM int16 samples. Walks fixed-size blocks of
-    block_samples samples each (block_samples/2 + 4 bytes); the trailing block
-    may be shorter (final partial FeedPcm). Each block is self-seeding from its
-    own 4-byte header, so this is robust to where the blocks fall relative to
-    the (irrelevant) BLE chunk boundaries."""
-    block_size = BLOCK_HEADER_SIZE + block_samples // 2
+def decode_stream(data: bytes) -> list[int]:
+    """Decodes the reassembled REC_CHUNK stream (one 4-byte header + continuous
+    nibbles) into PCM int16 samples."""
+    if len(data) < BLOCK_HEADER_SIZE:
+        return []
+    predictor = struct.unpack_from("<h", data, 0)[0]
+    step_index = _clamp_index(data[2])
     samples: list[int] = []
-    off = 0
-    n = len(data)
-    while off + BLOCK_HEADER_SIZE <= n:
-        block = data[off:off + block_size]
-        samples.extend(decode_block(block))
-        off += len(block)
+    for byte in data[BLOCK_HEADER_SIZE:]:
+        predictor, step_index = _decode_nibble(predictor, step_index, byte & 0x0F)
+        samples.append(predictor)
+        predictor, step_index = _decode_nibble(predictor, step_index, (byte >> 4) & 0x0F)
+        samples.append(predictor)
     return samples

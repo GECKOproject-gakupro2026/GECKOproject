@@ -29,15 +29,19 @@ namespace
 /* --- BLE AT link state (set from AT reply/event callbacks) --- */
 volatile bool bleLinkOk = false;
 volatile bool bleConnected = false;
-uint8_t bleAtBuffer[160]; /* long +BLE_EVT_WRITE events exceed 64 chars */
+uint8_t bleAtBuffer[560]; /* long AT lines: a 240-byte REC_CHUNK notify is a
+                             ~505-char AT+BLE_NOTIF_VAL hex line (was 160/320) */
 uint8_t bleRxByte;
 bool bleGlueReady = false;
 
 uint8_t bleSeq_ = 0;   /* Service のメンバから移す（BLE専用のシーケンス番号） */
 
 /* REC_CHUNK 1個あたりのADPCMペイロード長。REC_GET の応答オフセットは
- * seq*kRecChunkPayload バイト目。 */
-constexpr uint32_t kRecChunkPayload = 58U;
+ * seq*kRecChunkPayload バイト目。58→120→240 に拡張(notify GATT特性長を WB5MMG
+ * 側で 64→128→248 に広げ、AT/notify バッファも 560 へ拡張済み)。240+3=243 は
+ * ATT_MTU(251)-3=248 に収まる上限付近で、1 notify で1チャンク送れる。チャンク数が
+ * 更に半減し転送が速くなる。 */
+constexpr uint32_t kRecChunkPayload = 240U;
 
 /* --- BLE recording control/transfer state --- */
 Frame_Decoder bleWriteDecoder;

@@ -34,7 +34,7 @@ char AT_server_buffer_tx[64];
 char AT_server_buffer_reply[64];
 char AT_server_buffer_event[64];
 stm32wb_at_BLE_CMD_t AT_server_current_cmd;
-uint8_t at_buffer[160]; /* 64 was too small: NOTIF_VAL with a 20-byte payload is a 65-char line */
+uint8_t at_buffer[560]; /* 320->560: a 240-byte NOTIF_VAL payload is a ~505-char line */
 
 extern float tab_conv_tx_power[32];
 

@@ -49,6 +49,24 @@ size_t adpcm_encode(adpcm_state_t *state, const int16_t *pcm, size_t count,
 size_t adpcm_decode(adpcm_state_t *state, const uint8_t *in, size_t nbytes,
                     int16_t *pcm);
 
+/* Encodes `count` PCM samples as raw nibbles ONLY (no per-block header),
+ * chaining from the caller's `state`. Use this to build one continuous ADPCM
+ * stream across many calls: write a single header once (the recorder does this
+ * at Start via adpcm_encode of 0 samples, or by storing the initial state) and
+ * then append with this. Because the predictor/step_index are never reset
+ * mid-stream, there are no per-block boundary discontinuities (clicks).
+ * `count` must be even (the recorder feeds fixed even-sized frames), writing
+ * count/2 bytes. Returns the number of bytes written. */
+size_t adpcm_encode_nibbles(adpcm_state_t *state, const int16_t *pcm,
+                            size_t count, uint8_t *out);
+
+/* Decodes a continuous nibble stream (no header) produced by
+ * adpcm_encode_nibbles(), chaining from the caller's `state` (which must be
+ * seeded to the stream's initial predictor/step_index). Writes 2*nbytes
+ * samples. Returns the number of PCM samples written. */
+size_t adpcm_decode_nibbles(adpcm_state_t *state, const uint8_t *in,
+                            size_t nbytes, int16_t *pcm);
+
 #ifdef __cplusplus
 }
 #endif

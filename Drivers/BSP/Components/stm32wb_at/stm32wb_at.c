@@ -27,13 +27,15 @@
 /* Private macros ------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 static uint8_t *buffer_rx;
-static uint8_t buffer_rx_size;
-static uint8_t buffer_rx_cursor;
-static char str_received[160]; /* was 64: truncated long AT+... lines (e.g.
-                                   BLE_EVT_WRITE with a hex payload) via the
-                                   unchecked strcpy() below; must stay >=
-                                   the caller's buffer_rx size passed to
-                                   stm32wb_at_Init() (160 on both sides) */
+static uint16_t buffer_rx_size;   /* was uint8_t: capped AT lines at 255 chars,
+                                     which limited the notify payload to ~117 B.
+                                     uint16_t lifts that so larger REC_CHUNKs
+                                     (kRecChunkPayload) fit. */
+static uint16_t buffer_rx_cursor;
+static char str_received[560]; /* must stay >= the caller's buffer_rx size passed
+                                   to stm32wb_at_Init() (560 on both sides). A
+                                   240-byte notify payload is a ~505-char
+                                   AT+BLE_NOTIF_VAL hex line. */
 
 float tab_conv_tx_power[32] = {-40.00f, -20.85f, -19.75f, -18.85f, 
                                -17.60f, -16.50f, -15.25f, -14.10f,
@@ -52,7 +54,7 @@ float tab_conv_tx_power[32] = {-40.00f, -20.85f, -19.75f, -18.85f,
  * @param None
  * @retval 0 in case of success, an error code otherwise
  */
-uint8_t stm32wb_at_Init(uint8_t *buff_rx, uint8_t buff_rx_size)
+uint8_t stm32wb_at_Init(uint8_t *buff_rx, uint16_t buff_rx_size)
 {
   uint8_t status;
 
@@ -81,7 +83,8 @@ uint8_t stm32wb_at_Init(uint8_t *buff_rx, uint8_t buff_rx_size)
  */
 uint8_t stm32wb_at_Received(uint8_t byte)
 {
-  uint8_t status, i;
+  uint8_t status;
+  uint16_t i; /* index into buffer_rx (now up to 320) - must not wrap at 255 */
 
   if(buffer_rx_cursor < buffer_rx_size)
   {

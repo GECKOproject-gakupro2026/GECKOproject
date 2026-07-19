@@ -151,3 +151,39 @@ size_t adpcm_decode(adpcm_state_t *state, const uint8_t *in, size_t nbytes,
   }
   return outCount;
 }
+
+size_t adpcm_encode_nibbles(adpcm_state_t *state, const int16_t *pcm,
+                            size_t count, uint8_t *out)
+{
+  size_t outPos = 0U;
+  size_t i = 0U;
+  while (i < count)
+  {
+    uint8_t lo = encode_sample(state, pcm[i]);
+    i++;
+    uint8_t hi = 0U;
+    if (i < count)
+    {
+      hi = encode_sample(state, pcm[i]);
+      i++;
+    }
+    out[outPos] = (uint8_t)(lo | (hi << 4));
+    outPos++;
+  }
+  return outPos;
+}
+
+size_t adpcm_decode_nibbles(adpcm_state_t *state, const uint8_t *in,
+                            size_t nbytes, int16_t *pcm)
+{
+  size_t outCount = 0U;
+  for (size_t i = 0U; i < nbytes; i++)
+  {
+    uint8_t byte = in[i];
+    pcm[outCount] = decode_nibble(state, (uint8_t)(byte & 0x0FU));
+    outCount++;
+    pcm[outCount] = decode_nibble(state, (uint8_t)((byte >> 4) & 0x0FU));
+    outCount++;
+  }
+  return outCount;
+}

@@ -28,8 +28,10 @@
 /* Private macros ------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 /* Patched: 64 was too small - AT+BLE_NOTIF_VAL with a 20-byte payload is a
- * 65-character command line (17 + 4 + 2 + 40 + CRLF) and overflowed here */
-static char client_buff_tx[160];
+ * 65-character command line (17 + 4 + 2 + 40 + CRLF) and overflowed here.
+ * 2026-07-19: 160 -> 320 -> 560 for the larger notify payload (a 240-byte
+ * REC_CHUNK is a ~505-char AT+BLE_NOTIF_VAL hex line). */
+static char client_buff_tx[560];
 static stm32wb_at_BLE_CMD_t client_current_cmd;
 
 /* Private function prototypes -----------------------------------------------*/

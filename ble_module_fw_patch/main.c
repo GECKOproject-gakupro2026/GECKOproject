@@ -94,7 +94,7 @@ extern uint8_t global_adv_enable;
 
 /* USER CODE BEGIN PV */
 uint8_t AT_received_byte;
-extern uint8_t at_buffer[160];
+extern uint8_t at_buffer[560];
 extern Custom_Context_t Custom_Context;
 extern const uint8_t* BleGetBdAddress( void );
 

@@ -199,12 +199,15 @@ typedef struct
   uint8_t tx_power_code;
 } stm32wb_at_BLE_RF_POWER_t;
 
-/* BLE_NOTIF_VAL */
+/* BLE_NOTIF_VAL. val_tab was 64, then 128: raised to 248 for the larger notify
+ * payload (240-byte REC_CHUNK). Must stay <= the GATT characteristic length on
+ * the WB5MMG side (p2p_stm.c aci_gatt_add_char) and <= 255 (val_tab_len is u8),
+ * and <= ATT_MTU-3 (248). */
 typedef struct
 {
   uint8_t svc_index;
   uint8_t char_index;
-  uint8_t val_tab[64];
+  uint8_t val_tab[248];
   uint8_t val_tab_len;
 } stm32wb_at_BLE_NOTIF_VAL_t;
 
@@ -213,7 +216,7 @@ typedef struct
 {
   uint8_t svc_index;
   uint8_t char_index;
-  uint8_t val_tab[64];
+  uint8_t val_tab[248];
   uint8_t val_tab_len;
 } stm32wb_at_BLE_INDIC_VAL_t;
 

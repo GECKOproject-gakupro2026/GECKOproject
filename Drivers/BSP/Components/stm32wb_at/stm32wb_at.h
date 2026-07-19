@@ -56,7 +56,7 @@ extern "C" {
 /* Exported macros -----------------------------------------------------------*/
 
 /* Exported functions --------------------------------------------------------*/
-uint8_t stm32wb_at_Init(uint8_t *buff_rx, uint8_t buff_rx_size);
+uint8_t stm32wb_at_Init(uint8_t *buff_rx, uint16_t buff_rx_size);
 uint8_t stm32wb_at_Received(uint8_t byte);
 uint8_t stm32wb_at_Process_rx_frame(char * str);
 uint8_t str_to_byte_tab(char *str_in, uint8_t *tab, uint8_t* tab_len);
