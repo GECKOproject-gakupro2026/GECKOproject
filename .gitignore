@@ -11,3 +11,12 @@ __pycache__/
 
 # PC-side recordings and scratch output
 pc_side/status_monitor/recordings/
+
+# audio_codec: 圧縮出力フォルダ・生成物・入力音源(コード以外は追跡しない)
+pc_side/audio_codec/sample_out/
+pc_side/audio_codec/sample_lossy_out/
+pc_side/audio_codec/*.vad
+pc_side/audio_codec/*.flt
+pc_side/audio_codec/sample_compression_report.txt
+pc_side/audio_codec/sample.wav
+pc_side/audio_codec/sample.mp3
