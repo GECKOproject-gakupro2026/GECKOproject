@@ -12,7 +12,7 @@
 
 - モデル: `yamnet_e256_64x96_tl_int8.tflite`
 - 学習データ: FSD50Kの部分集合
-- 出力: `Speech`、`Gunshot_and_gunfire`、`Crying_and_sobbing`、`Knock`、`Glass`、および学習時に追加されたUnknown（garbage）クラス
+- 出力順: `Crying_and_sobbing`、`Glass`、`Gunshot_and_gunfire`、`Knock`、`Speech`、`other`。`other`は学習時のgarbage classである
 - 二値化: `Speech`だけを`voice`、その他を`non_voice`
 - 入力: 16 kHzモノラル音声から生成する`64 x 96 x 1`のmel-spectrogram
 - 対象: STがB-U585I-IOT02Aを正式なデプロイ対象にしている
@@ -141,8 +141,10 @@ non_voice = Gunshot_and_gunfire
           | Crying_and_sobbing
           | Knock
           | Glass
-          | Unknown
+          | other
 ```
+
+ST Model Zoo Servicesは学習・ヘッダ生成時にクラス名をアルファベット順へ並べる。したがって`Speech`は出力index 4、garbage classの内部名は`other`である。モデル設定YAMLの記載順を出力順として使わない。
 
 泣き声も人声へ含めたい場合は、モデルを変えずに`Speech OR Crying_and_sobbing`を`voice`へ写像できる。ただし最初の試験中は定義を変更しない。歌声、ささやき、テレビ越しの会話に対する保証は公開5クラス仕様からは導けないため、観察項目として記録する。
 
@@ -355,7 +357,7 @@ UARTは公式アプリREADMEの設定を確認し、初期値として115200 bau
 | T2 | 通常の話し声 | Speechが上昇し、top-1になる |
 | T3 | 机または扉をノック | Knockまたはnon_voice |
 | T4 | グラスを軽く鳴らす録音 | Glassまたはnon_voice |
-| T5 | 音楽、空調、拍手 | Unknownまたはnon_voice |
+| T5 | 音楽、空調、拍手 | `other`またはnon_voice |
 | T6 | 100連続推論 | reset、HardFault、AI errorなし |
 
 PoC合格条件:

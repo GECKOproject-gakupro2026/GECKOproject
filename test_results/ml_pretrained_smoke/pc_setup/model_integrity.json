@@ -1,0 +1,8 @@
+{
+  "model": "yamnet_e256_64x96_tl_int8.tflite",
+  "integrity": {
+    "size_bytes": 184240,
+    "sha256": "cd75689f072fac00d2a0fca063faec0ae0070a78d128d7f8d60c0f7ff88cd48d"
+  },
+  "status": "PASS"
+}

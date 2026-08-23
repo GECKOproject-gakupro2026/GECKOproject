@@ -1,0 +1,38 @@
+[
+  {
+    "file": "speech.wav",
+    "source": "FFmpeg flite synthetic human speech",
+    "patches": 11,
+    "top_index": 4,
+    "top_label": "Speech",
+    "top_score": 0.9861505627632141,
+    "speech_score": 0.9861505627632141
+  },
+  {
+    "file": "tone.wav",
+    "source": "FFmpeg 1 kHz sine",
+    "patches": 3,
+    "top_index": 5,
+    "top_label": "other",
+    "top_score": 0.99609375,
+    "speech_score": 0.0
+  },
+  {
+    "file": "noise.wav",
+    "source": "FFmpeg white noise",
+    "patches": 3,
+    "top_index": 5,
+    "top_label": "other",
+    "top_score": 0.99609375,
+    "speech_score": 0.0
+  },
+  {
+    "file": "bus.wav",
+    "source": "STM32 Model Zoo Services pinned repository",
+    "patches": 13,
+    "top_index": 5,
+    "top_label": "other",
+    "top_score": 0.8596754670143127,
+    "speech_score": 0.045673076063394547
+  }
+]

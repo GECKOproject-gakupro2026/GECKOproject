@@ -9,8 +9,8 @@
 
 | 段階 | 実行場所 | 基板 | STM32コンパイル環境 | 到達点 |
 |---|---|---:|---:|---|
-| 第1段階 | このチャット環境 | 不要 | 不要 | 調査、仕様固定、検証コード、設定テンプレート、テストを完成 |
-| 第2段階 | ユーザーPC | 不要 | 前半は不要、後半は必要 | モデル実体検証、PC推論、ST解析、C生成、firmware build |
+| 第1段階 | このチャット環境 | 不要 | 不要 | 調査、仕様固定、モデル取得、PC推論、検証コードを完成 |
+| 第2段階 | ユーザーPC | 不要 | 必要 | ST解析、C生成、公式applicationと現行firmwareをbuild |
 | 第3段階 | ユーザーPC＋B-U585I-IOT02A | 必要 | 必要 | 書込み、マイク推論、現行firmware統合、連続試験、OTA |
 
 作業をこの順に直列化する。基板が届くまでに第2段階まで完了させ、実機作業では「書込みと物理I/Oの検証」だけを残す。
@@ -28,9 +28,9 @@
 | モデル完全性検証スクリプト作成 | 完了 | Python標準ライブラリ |
 | Git LFSポインタ誤使用の自動検出 | 完了 | Python標準ライブラリ |
 | デプロイYAMLテンプレート作成 | 完了 | テキストエディタ |
-| モデル実体の取得 | 未実施 | Git＋Git LFS＋インターネット |
-| TFLite入出力の実測 | 未実施 | モデル実体＋TensorFlow/TFLite runtime |
-| 保存WAVによるPC推論 | 未実施 | 上記＋公式前処理環境＋WAV |
+| モデル実体の取得 | 完了 | Git＋Git LFS＋インターネット |
+| TFLite入出力の実測 | 完了 | TensorFlow 2.18.0 |
+| 保存WAVによるPC推論 | 完了 | 公式前処理＋合成音声／非音声＋ST付属bus.wav |
 
 ### 2.2 基板は不要だがSTM32コンパイル／ST環境が必要
 
@@ -66,6 +66,7 @@ Developer Cloudの`benchmark`は物理基板なしで実行できる。ローカ
 ```text
 pc_side/ml_pretrained_test/
 ├── model_manifest.json
+├── run_pc_inference.py
 ├── verify_model.py
 ├── test_verify_model.py
 └── deployment_fsd50k_speech_u5.yaml
@@ -106,23 +107,25 @@ ST Model Zoo Servicesの公式U5 deployment設定を基に、FSD50K YamNet-256 U
 - `unknown_class_threshold: 0.0`
 - Developer Cloud使用
 
-### 3.2 この環境での実行結果
+### 3.2 この環境での実行結果（2026-08-23更新）
 
 | 確認 | 結果 |
 |---|---|
 | Python | 3.12.13 |
 | `verify_model.py` syntax check | PASS |
-| 完全性検証unit test | 3/3 PASS |
+| 完全性検証unit test | 4/4 PASS |
 | YAML parse・manifest整合性検査 | PASS |
-| TensorFlow | 未導入 |
-| `tflite-runtime` | 未導入 |
+| TensorFlow | 2.18.0を一時venvへ導入 |
+| モデル実体 | 184,240 bytes、SHA-256一致、PASS |
+| TFLite I/O | `[1,64,96,1]` int8 → `[1,6]` float32、PASS |
+| PC推論 | 音声=Speech 98.62%、tone/noise=other 99.61%、bus=other 85.97% |
 | ARM GCC | 未導入 |
 | CubeIDE | 未導入 |
 | CubeProgrammer | 未導入 |
 | ST Edge AI | 未導入 |
-| モデル実体 | 未取得。GitHub connectorからはLFSポインタのみ取得可能 |
+| VS Codeローカル環境 | 未接続。現在はLinux chat sandboxで実行 |
 
-このため、このチャットではモデル実体のI/O inspection、PC推論、STコンパイル、firmware build、実機試験は実行できない。必要な入力や権限を迂回せず、第2・第3段階へ明確に残す。
+モデル取得、I/O inspection、PC推論まで完了した。STコンパイルとfirmware buildはtoolchain/myST環境がなく、実機試験は基板未接続のため未実施とする。
 
 ### 3.3 第1段階の完了条件
 
@@ -216,10 +219,10 @@ python ..\B-U585I-IOT02A\pc_side\ml_pretrained_test\verify_model.py `
 
 第2A完了条件:
 
-- [ ] Git LFSモデル実体のhash/sizeが一致
-- [ ] TFLite input/output実測がmanifestと一致
-- [ ] 保存音声でSpeech scoreの変化を確認
-- [ ] 実行環境を`pip freeze`で保存
+- [x] Git LFSモデル実体のhash/sizeが一致
+- [x] TFLite input/output実測がmanifestと一致
+- [x] 保存音声でSpeech scoreの変化を確認
+- [x] 実行環境の主要パッケージ版を保存
 
 ### 第2B段階: ST変換・firmware build
 

@@ -1,12 +1,29 @@
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from verify_model import VerificationError, is_git_lfs_pointer, verify_integrity
 
+MANIFEST = Path(__file__).with_name("model_manifest.json")
+
 
 class VerifyModelTests(unittest.TestCase):
+    def test_manifest_uses_st_training_label_order(self):
+        manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifest["output"]["labels"],
+            [
+                "Crying_and_sobbing",
+                "Glass",
+                "Gunshot_and_gunfire",
+                "Knock",
+                "Speech",
+                "other",
+            ],
+        )
+
     def test_accepts_matching_artifact(self) -> None:
         payload = b"TFL3-test-model"
         manifest = {

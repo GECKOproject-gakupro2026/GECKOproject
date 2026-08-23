@@ -19,12 +19,12 @@
     "shape": [1, 6],
     "dtype": "float32",
     "labels": [
-      "Speech",
-      "Gunshot_and_gunfire",
       "Crying_and_sobbing",
-      "Knock",
       "Glass",
-      "Unknown"
+      "Gunshot_and_gunfire",
+      "Knock",
+      "Speech",
+      "other"
     ]
   },
   "binary_mapping": {
@@ -34,7 +34,7 @@
       "Crying_and_sobbing",
       "Knock",
       "Glass",
-      "Unknown"
+      "other"
     ]
   },
   "preprocessing": {
