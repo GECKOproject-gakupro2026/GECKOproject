@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "model": {
+    "name": "yamnet_e256_64x96_tl_int8_fsd50k_with_unknown",
+    "file_name": "yamnet_e256_64x96_tl_int8.tflite",
+    "source_repository": "STMicroelectronics/stm32ai-modelzoo",
+    "source_commit": "1423c78953a830903485135febe1dd98ff31aed8",
+    "source_path": "audio_event_detection/yamnet/ST_pretrainedmodel_public_dataset/fsd50k/yamnet_e256_64x96_tl/with_unknown_class/yamnet_e256_64x96_tl_int8.tflite",
+    "source_url": "https://github.com/STMicroelectronics/stm32ai-modelzoo/blob/1423c78953a830903485135febe1dd98ff31aed8/audio_event_detection/yamnet/ST_pretrainedmodel_public_dataset/fsd50k/yamnet_e256_64x96_tl/with_unknown_class/yamnet_e256_64x96_tl_int8.tflite",
+    "sha256": "cd75689f072fac00d2a0fca063faec0ae0070a78d128d7f8d60c0f7ff88cd48d",
+    "size_bytes": 184240,
+    "license": "Apache-2.0"
+  },
+  "input": {
+    "shape": [1, 64, 96, 1],
+    "dtype": "int8"
+  },
+  "output": {
+    "shape": [1, 6],
+    "dtype": "float32",
+    "labels": [
+      "Speech",
+      "Gunshot_and_gunfire",
+      "Crying_and_sobbing",
+      "Knock",
+      "Glass",
+      "Unknown"
+    ]
+  },
+  "binary_mapping": {
+    "voice": ["Speech"],
+    "non_voice": [
+      "Gunshot_and_gunfire",
+      "Crying_and_sobbing",
+      "Knock",
+      "Glass",
+      "Unknown"
+    ]
+  },
+  "preprocessing": {
+    "sample_rate_hz": 16000,
+    "n_fft": 512,
+    "window_length_samples": 400,
+    "hop_length_samples": 160,
+    "window": "hann",
+    "center": false,
+    "power": 1.0,
+    "n_mels": 64,
+    "patch_length_frames": 96,
+    "fmin_hz": 125,
+    "fmax_hz": 7500,
+    "mel_norm": null,
+    "htk": true,
+    "to_db": false
+  }
+}
