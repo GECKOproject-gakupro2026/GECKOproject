@@ -83,6 +83,9 @@ uint32_t Comm_GetLinkStatus(void);
  * the AI inference input - audio capture itself stays Secure (Phase D). */
 uint32_t Comm_GetAudioBuffer(int16_t *dst, uint32_t maxSamples);
 
+/* Runs one 975 ms log-mel + YamNet inference in Secure world. */
+int AI_RunOnce(void);
+
 #endif /* SECURE_NSC_H */
 /* USER CODE END Non_Secure_CallLib_h */
 

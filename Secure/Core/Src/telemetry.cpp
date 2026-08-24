@@ -84,7 +84,7 @@ uint32_t adcReadChannel(uint32_t channel)
   (void)HAL_ADC_Stop(&hadcMcu);
   return v;
 }
-constexpr size_t kAudioSamples = 2048;   /* circular capture buffer */
+constexpr size_t kAudioSamples = 15600;  /* 96 log-mel frames, 975 ms */
 
 int16_t audioBuf[kAudioSamples];
 
@@ -1173,29 +1173,37 @@ void Service::poll()
     profStart = now;
   }
 
-  /* PCM streaming: forward each ready buffer half as two 512-sample frames */
+  /* PCM streaming: forward every sample from each completed DMA half. */
   if (audioStream_)
   {
     uint32_t events = g_AudioEvents;
     if (events != 0U)
     {
       g_AudioEvents = 0;
-      const int16_t *half =
-          (events & 1U) != 0U ? &audioBuf[0] : &audioBuf[kAudioSamples / 2];
-      for (int part = 0; part < 2; part++)
+      constexpr size_t halfSamples = kAudioSamples / 2U;
+      for (uint32_t halfIndex = 0; halfIndex < 2U; ++halfIndex)
       {
-        size_t len = Frame_Encode(
-            FRAME_CMD_AUDIO, audioSeq_++,
-            reinterpret_cast<const uint8_t *>(half + part * 512), 1024U,
-            audioFrame, sizeof(audioFrame));
-        if (len > 0U)
+        if ((events & (1U << halfIndex)) == 0U)
         {
-          /* audio must not drop: wait for the in-flight frame (<= 12 ms) */
-          (void)uartSendAsync(audioFrame, len, 15);
-          if (tcpClientFd >= 0)
+          continue;
+        }
+        const int16_t *half = &audioBuf[halfIndex * halfSamples];
+        for (size_t offset = 0; offset < halfSamples; offset += 512U)
+        {
+          size_t samples = (halfSamples - offset < 512U)
+                               ? halfSamples - offset : 512U;
+          size_t len = Frame_Encode(
+              FRAME_CMD_AUDIO, audioSeq_++,
+              reinterpret_cast<const uint8_t *>(half + offset),
+              samples * sizeof(int16_t), audioFrame, sizeof(audioFrame));
+          if (len > 0U)
           {
-            (void)MX_WIFI_Socket_send(wifi_obj_get(), tcpClientFd, audioFrame,
-                                      static_cast<int32_t>(len), 0);
+            (void)uartSendAsync(audioFrame, len, 15);
+            if (tcpClientFd >= 0)
+            {
+              (void)MX_WIFI_Socket_send(wifi_obj_get(), tcpClientFd, audioFrame,
+                                        static_cast<int32_t>(len), 0);
+            }
           }
         }
       }

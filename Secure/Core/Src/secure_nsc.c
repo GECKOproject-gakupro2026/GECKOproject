@@ -39,6 +39,7 @@ extern int CommBridge_PollHostCommand(uint8_t *out);
 extern void CommBridge_SetTelemetryEnabled(uint32_t on);
 extern uint32_t CommBridge_GetLinkStatus(void);
 extern uint32_t CommBridge_GetAudioBuffer(int16_t *dst, uint32_t maxSamples);
+extern int AiBridge_RunOnce(void);
 /** @addtogroup STM32U5xx_HAL_Examples
 
   * @{
@@ -175,6 +176,12 @@ CMSE_NS_ENTRY uint32_t Comm_GetAudioBuffer(int16_t *dst, uint32_t maxSamples)
     return 0U;
   }
   return CommBridge_GetAudioBuffer(dst, maxSamples);
+}
+
+/** Run one Secure-owned audio classification from the live microphone. */
+CMSE_NS_ENTRY int AI_RunOnce(void)
+{
+  return AiBridge_RunOnce();
 }
 
 /**

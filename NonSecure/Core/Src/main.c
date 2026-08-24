@@ -209,9 +209,17 @@ int main(void)
 
     /* Poll host input every loop (even in IDLE) - this is the wake source. */
     uint8_t cmdByte = 0U;
-    if (Comm_PollHostCommand(&cmdByte) != COMM_POLL_NONE)
+    int pollResult = Comm_PollHostCommand(&cmdByte);
+    if (pollResult != COMM_POLL_NONE)
     {
       lastActivityMs = now; /* any inbound host traffic counts as activity */
+    }
+    if (pollResult == COMM_POLL_BYTE && cmdByte == 'i')
+    {
+      Comm_SetTelemetryEnabled(0U);
+      (void)AI_RunOnce();
+      Comm_SetTelemetryEnabled(1U);
+      nextTelemetryTick = HAL_GetTick();
     }
 
     if (mode == MODE_ACTIVE)

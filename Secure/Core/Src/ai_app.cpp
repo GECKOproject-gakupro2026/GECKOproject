@@ -12,11 +12,12 @@
 #include "audio_net.h"
 #include "audio_net_data.h"
 #include "ai_labels.h"
+#include "audio_preproc.hpp"
 
 #include <cstdio>
 #include <cstring>
 
-extern "C" const int16_t *Telemetry_GetAudioBuffer(uint32_t *count);
+extern "C" uint32_t CommBridge_GetAudioBuffer(int16_t *dst, uint32_t maxSamples);
 
 namespace aiapp
 {
@@ -28,6 +29,7 @@ AI_ALIGNED(32)
 ai_u8 activations[AI_AUDIO_NET_DATA_ACTIVATIONS_SIZE];
 bool initDone = false;
 bool initOk = false;
+int16_t pcmSnapshot[audio_preproc::kPatchSamples];
 } // namespace
 
 bool init()
@@ -53,8 +55,12 @@ bool init()
            report.model_name, (unsigned long)report.n_macc,
            (long)AI_AUDIO_NET_IN_1_SIZE, (long)AI_AUDIO_NET_OUT_1_SIZE);
   }
-  initOk = true;
-  return true;
+  initOk = audio_preproc::init();
+  if (!initOk)
+  {
+    printf("[AI] audio preprocessing init failed\r\n");
+  }
+  return initOk;
 }
 
 bool runOnce(Result &out)
@@ -71,15 +77,24 @@ bool runOnce(Result &out)
     return false;
   }
 
-  /* Copy + normalize the live 2048-sample microphone window */
-  uint32_t count = 0;
-  const int16_t *pcm = Telemetry_GetAudioBuffer(&count);
-  ai_float *x = reinterpret_cast<ai_float *>(in[0].data);
-  uint32_t n = (count < AI_AUDIO_NET_IN_1_SIZE) ? count : AI_AUDIO_NET_IN_1_SIZE;
-  for (uint32_t i = 0; i < n; i++)
+  uint32_t count = CommBridge_GetAudioBuffer(
+      pcmSnapshot, static_cast<uint32_t>(audio_preproc::kPatchSamples));
+  if (count != audio_preproc::kPatchSamples)
   {
-    x[i] = static_cast<ai_float>(pcm[i]) / 32768.0f;
+    printf("[AI] audio snapshot unavailable (%lu/%lu samples)\r\n",
+           (unsigned long)count,
+           (unsigned long)audio_preproc::kPatchSamples);
+    return false;
   }
+
+  uint32_t prepStart = HAL_GetTick();
+  if (!audio_preproc::run(pcmSnapshot, count,
+                          reinterpret_cast<int8_t *>(in[0].data)))
+  {
+    printf("[AI] preprocessing failed\r\n");
+    return false;
+  }
+  out.preprocessUs = (HAL_GetTick() - prepStart) * 1000U;
 
   uint32_t t0 = HAL_GetTick();
   if (ai_audio_net_run(network, in, outBuf) != 1)
@@ -112,3 +127,22 @@ const char *label(uint8_t cls)
 }
 
 } // namespace aiapp
+
+extern "C" int AiBridge_RunOnce(void)
+{
+  aiapp::Result result = {};
+  if (!aiapp::runOnce(result))
+  {
+    return -1;
+  }
+  printf("[AI] %s", aiapp::label(result.topClass));
+  for (uint8_t i = 0; i < result.nClasses; ++i)
+  {
+    printf("  %s=%d%%", aiapp::label(i),
+           (int)(result.scores[i] * 100.0F + 0.5F));
+  }
+  printf("  pre=%lums infer=%lums\r\n",
+         (unsigned long)(result.preprocessUs / 1000U),
+         (unsigned long)(result.inferenceUs / 1000U));
+  return 0;
+}

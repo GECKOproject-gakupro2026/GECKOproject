@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    audio_net_data_params.h
   * @author  AST Embedded Analytics Research Platform
-  * @date    2026-07-11T09:03:30+0900
+  * @date    2026-08-24T14:51:47+0900
   * @brief   AI Tool Automatic Code Generator for Embedded NN computing
   ******************************************************************************
   * Copyright (c) 2026 STMicroelectronics.
@@ -28,18 +28,18 @@
 
 
 #define AI_AUDIO_NET_DATA_ACTIVATIONS_SIZES \
-  { 16416, }
-#define AI_AUDIO_NET_DATA_ACTIVATIONS_SIZE     (16416)
+  { 112196, }
+#define AI_AUDIO_NET_DATA_ACTIVATIONS_SIZE     (112196)
 #define AI_AUDIO_NET_DATA_ACTIVATIONS_COUNT    (1)
-#define AI_AUDIO_NET_DATA_ACTIVATION_1_SIZE    (16416)
+#define AI_AUDIO_NET_DATA_ACTIVATION_1_SIZE    (112196)
 
 
 
 #define AI_AUDIO_NET_DATA_WEIGHTS_SIZES \
-  { 16876, }
-#define AI_AUDIO_NET_DATA_WEIGHTS_SIZE         (16876)
+  { 138136, }
+#define AI_AUDIO_NET_DATA_WEIGHTS_SIZE         (138136)
 #define AI_AUDIO_NET_DATA_WEIGHTS_COUNT        (1)
-#define AI_AUDIO_NET_DATA_WEIGHT_1_SIZE        (16876)
+#define AI_AUDIO_NET_DATA_WEIGHT_1_SIZE        (138136)
 
 
 

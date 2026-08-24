@@ -159,3 +159,81 @@ python -m unittest discover -s pc_side/ml_pretrained_test -p "test_*.py" -v
 - [Model Zoo Services U5 deployment](https://github.com/STMicroelectronics/stm32ai-modelzoo-services/blob/0f6210ed5156126b782e1c43249063a477484b20/audio_event_detection/docs/README_DEPLOYMENT.md)
 - [Codex IDE extension](https://learn.chatgpt.com/docs/codex/ide)
 - [Remote connections](https://learn.chatgpt.com/docs/remote-connections)
+
+## Windows PC phase 2B update (2026-08-24)
+
+- Branch/HEAD: `feature/ml-voice-classification-test` / `cd90a5d`
+- Board discovery only: B-U585I-IOT02A, ST-LINK `0026003C3432511630343838`, COM9
+- CubeProgrammer: 2.23.0; ST-LINK firmware: V3J17M10
+- No flash, option-byte change, reset command, or OTA was performed.
+- The temporary C-drive verification tree was deleted after PASS.
+- The D-drive Model Zoo checkout contains only the pinned model and Git metadata
+  (about 0.70 MB). The model is 184,240 bytes and its SHA-256 is
+  `cd75689f072fac00d2a0fca063faec0ae0070a78d128d7f8d60c0f7ff88cd48d`.
+- Model Zoo Services is pinned at
+  `0f6210ed5156126b782e1c43249063a477484b20` and sparsely materialized for
+  audio-event detection, common/API code, and the STM32U5 application. Total
+  checkout size including Git metadata is 210,744,983 bytes. The full Python
+  requirements set and unrelated applications/models were not installed.
+
+### Tool versions
+
+- ST Edge AI Core: 2.2.0-20266 `2adc00962`
+- STM32CubeAI runtime selected for generated code: 10.2.0-RC1
+- Arm GNU Toolchain: 14.3.Rel1 (`arm-none-eabi-gcc` 14.3.1 20250623)
+- STM32CubeIDE: 2.2.0 (headless builder verified)
+
+### ST analysis and generation
+
+Local `stedgeai analyze` and both legacy/ST-AI generation completed with exit 0.
+The ST-AI output uses C name `network` and is stored under
+`test_results/ml_pretrained_smoke/stedgeai_core_2_2/generate_stai/`.
+
+| item | result |
+|---|---:|
+| unsupported operators | 0 |
+| input | int8 `[1,64,96,1]`, scale `0.057150375`, zero point `33` |
+| output | float32 `[1,6]` |
+| weights | 138,136 B |
+| activations/total RAM | 112,196 B |
+| MACC | 23,930,924 |
+
+The generated `network.c` and `network_data.c` both compile for Cortex-M33 with
+Arm GCC 14.3.Rel1 and the matching 10.2 runtime headers (exit 0).
+
+### Unflashed builds
+
+- Current repository Secure Debug: PASS, exit 0; text 331,832 B, data 4,700 B,
+  bss 52,520 B.
+- Current repository NonSecure Debug: PASS, exit 0; text 138,956 B, data 476 B,
+  bss 19,452 B.
+- The ignored generated Debug makefiles were stale relative to current sources;
+  they were synchronized locally for this build only. No tracked firmware source
+  was changed by that synchronization.
+- Official STM32U5 Model Zoo baseline application: PASS, exit 0; text 357,985 B,
+  data 1,728 B, bss 189,216 B.
+- Official STM32U5 application with the exact 6-class target model and matching
+  Runtime 10.2: PASS, exit 0; text 356,345 B, data 1,712 B, bss 189,216 B.
+  The ELF, MAP, BIN, sizes, and SHA-256 values are stored under
+  `test_results/ml_pretrained_smoke/official_u5_core_2_2/`.
+- The external Model Zoo Services checkout was restored to a clean tracked and
+  untracked state after the build. Its generated Debug output and the temporary
+  CubeIDE workspace were deleted to keep D-drive use minimal.
+- B-U585I target benchmark: NOT RUN. Local analysis is complete, but an exact
+  target benchmark requires Developer Cloud credentials or a benchmark firmware
+  write; neither was used during phase 2B.
+- Final recheck: all 4 verifier unit tests passed, TFLite I/O inspection returned
+  `PASS`, the target class strings were found in the saved ELF, Model Zoo
+  Services was clean, and STM32CubeProgrammer enumerated the same board on COM9.
+- The installed local ST Edge AI Core 2.2 CLI has no `benchmark` subcommand
+  (`analyze`, `generate`, `validate`, and `supported-ops` are available).
+  Therefore the benchmark gate still requires either Developer Cloud access or
+  authorization to overwrite the connected board with benchmark firmware.
+
+## TrustZone board phase update (2026-08-24)
+
+Board authorization was subsequently provided. The target model was integrated
+into the repository's existing Secure/NonSecure firmware, both images built and
+verified successfully, and 10/10 consecutive on-board inferences passed. See
+`../board/README.md` for the flash backup, image hashes, programming results,
+timings, and post-test disk cleanup.

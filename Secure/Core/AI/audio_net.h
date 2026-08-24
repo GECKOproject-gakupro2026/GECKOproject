@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    audio_net.h
   * @author  AST Embedded Analytics Research Platform
-  * @date    2026-07-11T09:03:30+0900
+  * @date    2026-08-24T14:51:47+0900
   * @brief   AI Tool Automatic Code Generator for Embedded NN computing
   ******************************************************************************
   * @attention
@@ -23,7 +23,7 @@
 
 /******************************************************************************/
 #define AI_AUDIO_NET_MODEL_NAME          "audio_net"
-#define AI_AUDIO_NET_ORIGIN_MODEL_NAME   "model"
+#define AI_AUDIO_NET_ORIGIN_MODEL_NAME   "yamnet_e256_64x96_tl_int8"
 
 /******************************************************************************/
 #define AI_AUDIO_NET_ACTIVATIONS_ALIGNMENT   (4)
@@ -43,11 +43,12 @@ AI_DEPRECATED
 #define AI_AUDIO_NET_IN_SIZE_BYTES { \
   AI_AUDIO_NET_IN_1_SIZE_BYTES, \
 }
-#define AI_AUDIO_NET_IN_1_FORMAT      (AI_BUFFER_FORMAT_FLOAT)
-#define AI_AUDIO_NET_IN_1_HEIGHT      (2048)
+#define AI_AUDIO_NET_IN_1_FORMAT      (AI_BUFFER_FORMAT_S8)
+#define AI_AUDIO_NET_IN_1_HEIGHT      (64)
+#define AI_AUDIO_NET_IN_1_WIDTH       (96)
 #define AI_AUDIO_NET_IN_1_CHANNEL     (1)
-#define AI_AUDIO_NET_IN_1_SIZE        (2048)
-#define AI_AUDIO_NET_IN_1_SIZE_BYTES  (8192)
+#define AI_AUDIO_NET_IN_1_SIZE        (6144)
+#define AI_AUDIO_NET_IN_1_SIZE_BYTES  (6144)
 
 /******************************************************************************/
 #define AI_AUDIO_NET_OUT_NUM       (1)
@@ -63,12 +64,12 @@ AI_DEPRECATED
   AI_AUDIO_NET_OUT_1_SIZE_BYTES, \
 }
 #define AI_AUDIO_NET_OUT_1_FORMAT      (AI_BUFFER_FORMAT_FLOAT)
-#define AI_AUDIO_NET_OUT_1_CHANNEL     (3)
-#define AI_AUDIO_NET_OUT_1_SIZE        (3)
-#define AI_AUDIO_NET_OUT_1_SIZE_BYTES  (12)
+#define AI_AUDIO_NET_OUT_1_CHANNEL     (6)
+#define AI_AUDIO_NET_OUT_1_SIZE        (6)
+#define AI_AUDIO_NET_OUT_1_SIZE_BYTES  (24)
 
 /******************************************************************************/
-#define AI_AUDIO_NET_N_NODES (11)
+#define AI_AUDIO_NET_N_NODES (21)
 
 
 AI_API_DECLARE_BEGIN

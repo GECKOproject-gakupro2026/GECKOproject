@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    audio_net_data.h
   * @author  AST Embedded Analytics Research Platform
-  * @date    2026-07-11T09:03:30+0900
+  * @date    2026-08-24T14:51:47+0900
   * @brief   AI Tool Automatic Code Generator for Embedded NN computing
   ******************************************************************************
   * Copyright (c) 2026 STMicroelectronics.
@@ -32,7 +32,7 @@ AI_DEPRECATED
 AI_API_DECLARE_BEGIN
 
 
-extern const ai_u64 s_audio_net_weights_array_u64[2110];
+extern const ai_u64 s_audio_net_weights_array_u64[17267];
 
 
 

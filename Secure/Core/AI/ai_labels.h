@@ -3,11 +3,14 @@
 #ifndef AI_LABELS_H
 #define AI_LABELS_H
 
-#define AI_LABELS_COUNT 3
+#define AI_LABELS_COUNT 6
 static const char *const AI_LABELS[AI_LABELS_COUNT] = {
-    "silence",
-    "tone",
-    "noise",
+    "Crying_and_sobbing",
+    "Glass",
+    "Gunshot_and_gunfire",
+    "Knock",
+    "Speech",
+    "other",
 };
 
 #endif /* AI_LABELS_H */

@@ -2,7 +2,7 @@
   ******************************************************************************
   * @file    audio_net_data.c
   * @author  AST Embedded Analytics Research Platform
-  * @date    2026-07-11T09:03:30+0900
+  * @date    2026-08-24T14:51:47+0900
   * @brief   AI Tool Automatic Code Generator for Embedded NN computing
   ******************************************************************************
   * @attention
@@ -21,13 +21,13 @@
 AI_API_DECLARE_BEGIN
 ai_buffer g_audio_net_data_map_activations[AI_AUDIO_NET_DATA_ACTIVATIONS_COUNT] = {
   AI_BUFFER_INIT(AI_FLAG_NONE,  AI_BUFFER_FORMAT_U8,
-    AI_BUFFER_SHAPE_INIT(AI_SHAPE_BCWH, 4, 1, 16416, 1, 1),
-    16416, NULL, NULL),    /* heap_overlay_pool */
+    AI_BUFFER_SHAPE_INIT(AI_SHAPE_BCWH, 4, 1, 112196, 1, 1),
+    112196, NULL, NULL),    /* heap_overlay_pool */
   };
 ai_buffer g_audio_net_data_map_weights[AI_AUDIO_NET_DATA_WEIGHTS_COUNT] = {
   AI_BUFFER_INIT(AI_FLAG_NONE,  AI_BUFFER_FORMAT_U8,
-    AI_BUFFER_SHAPE_INIT(AI_SHAPE_BCWH, 4, 1, 16876, 1, 1),
-    16876, NULL, s_audio_net_weights_array_u64),   /* weights_array */
+    AI_BUFFER_SHAPE_INIT(AI_SHAPE_BCWH, 4, 1, 138136, 1, 1),
+    138136, NULL, s_audio_net_weights_array_u64),   /* weights_array */
   };
 
 
