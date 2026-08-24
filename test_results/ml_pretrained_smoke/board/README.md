@@ -45,10 +45,21 @@ This reduced Secure `text` by 115,936 bytes from the initial verified build.
 - Inference range: 279-280 ms
 - Top class: `other` on all ten runs, confidence 94-98%
 
+A second ten-run test was performed while human speech audio was being played:
+
+- Top class: `Speech` on all ten runs
+- First run: `Speech=50%`, `other=50%` (the displayed top class was `Speech`)
+- Remaining nine runs: `Speech=85-100%`, `other=0-15%`
+- Preprocessing range: 119-120 ms
+- Inference range: 279-280 ms
+
+This confirms that the microphone and preprocessing path distinguish the
+speech stimulus from the earlier ambient-only input.
+
 The test confirms capture of the approximately 0.975-second microphone window,
 official YamNet preprocessing, TrustZone gateway execution, and stable
-six-class inference. Controlled speech, knock, glass, crying, and gunshot test
-stimuli were not played during this smoke test.
+six-class inference. Controlled knock, glass, crying, and gunshot test stimuli
+were not played during this smoke test.
 
 ## Disk cleanup
 
